@@ -39,3 +39,27 @@ shared/           # logger, errors, guards
   "amount": 2500,
   "useFeePayer": true
 }
+Environment
+| Var                      | Description                 |
+| ------------------------ | --------------------------- |
+| `RPC_URL`                | Solana RPC                  |
+| `PROGRAM_ID`             | Escrow program              |
+| `USDC_MINT`              | SPL USDC mint               |
+| `FEE_PAYER_SECRET`       | base58 secret for fee-payer |
+| `ACTIONS_PUBLIC_BASEURL` | for Blink links             |
+| `RATE_LIMIT_PER_MIN`     | anti-abuse                  |
+
+Test
+pnpm test       # unit
+pnpm test:e2e   # endpoint simulation (requires RPC)
+Security
+
+All txs simulate before returning
+
+IP & wallet rate limiting for fee-payer
+
+Strict DTO validation (zod/class-validator)
+
+License
+
+MIT
