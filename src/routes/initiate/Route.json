@@ -1,0 +1,16 @@
+{
+  "name": "InitiateRoute",
+  "type": "route",
+  "location": "src/routes/initiate/index.ts",
+  "version": "1.0.0",
+  "method": "POST",
+  "path": "/api/escrow/initiate",
+  "dependencies": {
+    "internal": ["src/services/escrow-service.ts", "src/types/escrow.ts"],
+    "external": ["express"]
+  },
+  "interactions": {
+    "consumed_by": ["web-app/src/features/escrow/api.ts"]
+  }
+}
+

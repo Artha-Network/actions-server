@@ -1,0 +1,16 @@
+{
+  "name": "EscrowTypes",
+  "type": "types",
+  "location": "src/types/escrow.ts",
+  "version": "1.0.0",
+  "exports": {
+    "types": [
+      "InitiateEscrowInput",
+      "InitiateEscrowResult",
+      "FundEscrowInput",
+      "ReleaseEscrowInput",
+      "DisputeEscrowInput"
+    ]
+  }
+}
+

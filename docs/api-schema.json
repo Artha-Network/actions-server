@@ -1,0 +1,59 @@
+{
+  "openapi": "3.1.0",
+  "info": { "title": "Artha Actions Server", "version": "1.0.0" },
+  "paths": {
+    "/api/escrow/initiate": {
+      "post": {
+        "summary": "Initiate escrow",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/InitiateEscrowInput" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/InitiateEscrowResult" } } }
+          }
+        }
+      }
+    },
+    "/api/escrow/fund": {
+      "post": { "summary": "Fund escrow", "responses": { "200": { "description": "OK" } } }
+    },
+    "/api/escrow/release": {
+      "post": { "summary": "Release escrow", "responses": { "200": { "description": "OK" } } }
+    },
+    "/api/escrow/dispute": {
+      "post": { "summary": "Open dispute", "responses": { "200": { "description": "OK" } } }
+    }
+  },
+  "components": {
+    "schemas": {
+      "InitiateEscrowInput": {
+        "type": "object",
+        "required": ["title", "amount", "currency", "counterpartyAddress", "feeBps"],
+        "properties": {
+          "title": { "type": "string" },
+          "amount": { "type": "number" },
+          "currency": { "type": "string", "enum": ["USDC"] },
+          "counterpartyAddress": { "type": "string" },
+          "feeBps": { "type": "number", "minimum": 0, "maximum": 10000 },
+          "dueDateUnix": { "type": ["integer", "null"] },
+          "description": { "type": "string" }
+        }
+      },
+      "InitiateEscrowResult": {
+        "type": "object",
+        "properties": {
+          "dealId": { "type": "string" },
+          "status": { "type": "string", "enum": ["INITIATED"] }
+        }
+      }
+    }
+  }
+}
+

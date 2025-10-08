@@ -1,0 +1,13 @@
+{
+  "name": "FundRoute",
+  "type": "route",
+  "location": "src/routes/fund/index.ts",
+  "version": "1.0.0",
+  "method": "POST",
+  "path": "/api/escrow/fund",
+  "dependencies": {
+    "internal": ["src/services/escrow-service.ts", "src/types/escrow.ts"],
+    "external": ["express"]
+  }
+}
+

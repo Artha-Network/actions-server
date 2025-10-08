@@ -1,0 +1,14 @@
+{
+  "name": "EscrowService",
+  "type": "service",
+  "location": "src/services/escrow-service.ts",
+  "version": "1.0.0",
+  "exports": {
+    "methods": ["initiate", "fund", "release", "dispute"]
+  },
+  "dependencies": {
+    "internal": ["src/types/escrow.ts", "src/utils/validation.ts"],
+    "external": []
+  }
+}
+
