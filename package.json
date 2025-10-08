@@ -2,7 +2,7 @@
   "name": "actions-server",
   "version": "1.0.0",
   "private": true,
-  "type": "module",
+  "type": "commonjs",
   "main": "dist/server.js",
   "scripts": {
     "dev": "tsx watch server.ts",
