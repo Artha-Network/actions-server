@@ -1,0 +1,190 @@
+// ============================================================
+// Artha Network — Prisma schema (targets Supabase artha schema)
+// Matches previously installed SQL tables/enums/RLS
+// ============================================================
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL") // include ?schema=artha
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+///////////////////////
+// Enums (1:1 with DB)
+///////////////////////
+
+enum DealStatus {
+  INIT
+  FUNDED
+  DELIVERED
+  DISPUTED
+  RESOLVED
+  RELEASED
+  REFUNDED
+  @@map("deal_status")
+}
+
+enum TicketAction {
+  RELEASE
+  REFUND
+  SPLIT
+  @@map("ticket_action")
+}
+
+enum TicketSource {
+  AI
+  HUMAN
+  @@map("ticket_source")
+}
+
+enum AttestationKind {
+  DEAL_SUCCESS
+  DEAL_DEFAULT
+  BUYER_GOOD
+  SELLER_GOOD
+  @@map("attestation_kind")
+}
+
+/////////////////////////
+// Models (tables)
+/////////////////////////
+
+model User {
+  /// Primary key (generated in DB by gen_random_uuid()).
+  id               String   @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
+  walletPublicKey  String?  @unique @map("wallet_public_key")
+  emailAddress     String?  @unique @map("email_address")
+  displayName      String?  @map("display_name")
+  kycLevel         Int      @default(0) @map("kyc_level")
+  reputationScore  Decimal  @default(0) @db.Numeric(5, 2) @map("reputation_score")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @default(now()) @map("updated_at")
+
+  // Relations
+  dealsAsSeller    Deal[]   @relation("SellerDeals")
+  dealsAsBuyer     Deal[]   @relation("BuyerDeals")
+  submittedEvidence Evidence[]
+  attestations     Attestation[] @relation("UserAttestations")
+
+  @@map("users")
+  // DB has a CHECK that either wallet_public_key or email_address is not null
+}
+
+model Deal {
+  id                String      @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
+  // Foreign keys
+  sellerId          String      @db.Uuid @map("seller_id")
+  buyerId           String      @db.Uuid @map("buyer_id")
+
+  // Relations
+  seller            User        @relation("SellerDeals", fields: [sellerId], references: [id], onDelete: Restrict)
+  buyer             User        @relation("BuyerDeals",  fields: [buyerId],  references: [id], onDelete: Restrict)
+
+  arbiterPubkey     String      @map("arbiter_pubkey")
+  priceUsd          Decimal     @db.Numeric(12, 2) @map("price_usd")
+  depositTokenMint  String      @map("deposit_token_mint")
+  vaultAta          String      @map("vault_ata")
+  status            DealStatus
+  deliverDeadline   DateTime    @map("deliver_deadline")
+  disputeDeadline   DateTime    @map("dispute_deadline")
+  usdPriceSnapshot  Json        @map("usd_price_snapshot") // {feed_id, price, conf, slot}
+  feeBps            Int         @default(0) @map("fee_bps")
+  createdAt         DateTime    @default(now()) @map("created_at")
+  fundedAt          DateTime?   @map("funded_at")
+  updatedAt         DateTime    @default(now()) @map("updated_at")
+
+  // Children
+  evidence          Evidence[]
+  tickets           ResolveTicket[]
+  attestations      Attestation[]
+  priceSnapshots    PriceSnapshot[]
+
+  @@index([sellerId, createdAt(sort: Desc)], map: "deals_seller_created_idx")
+  @@index([buyerId, createdAt(sort: Desc)],  map: "deals_buyer_created_idx")
+  @@index([status],                          map: "deals_status_idx")
+  @@map("deals")
+}
+
+model Evidence {
+  id             String   @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
+  dealId         String   @db.Uuid @map("deal_id")
+  submittedById  String   @db.Uuid @map("submitted_by")
+  cid            String
+  mimeType       String   @map("mime_type")
+  submittedAt    DateTime @default(now()) @map("submitted_at")
+
+  // Relations
+  deal           Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  submittedBy    User     @relation(fields: [submittedById], references: [id], onDelete: Restrict)
+
+  @@index([dealId],        map: "evidence_deal_idx")
+  @@index([submittedById], map: "evidence_submitter_idx")
+  @@map("evidence")
+}
+
+model ResolveTicket {
+  id             String       @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
+  dealId         String       @db.Uuid @map("deal_id")
+  finalAction    TicketAction @map("final_action")
+  sellerBps      Int?         @map("seller_bps")      // if SPLIT, seller share in bps
+  confidence     Decimal      @db.Numeric(3, 2)
+  rationaleCid   String       @map("rationale_cid")
+  arbiterPubkey  String       @map("arbiter_pubkey")
+  signature      String
+  issuedAt       DateTime     @default(now()) @map("issued_at")
+  expiresAt      DateTime?    @map("expires_at")
+  source         TicketSource
+
+  // Relations
+  deal           Deal         @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  @@index([dealId],  map: "tickets_deal_idx")
+  @@index([source],  map: "tickets_source_idx")
+  @@map("resolve_tickets")
+}
+
+model Attestation {
+  id            String          @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
+  dealId        String          @db.Uuid @map("deal_id")
+  subjectUserId String          @db.Uuid @map("subject_user")
+  kind          AttestationKind
+  scoreDelta    Int             @map("score_delta")
+  createdAt     DateTime        @default(now()) @map("created_at")
+
+  // Relations
+  deal          Deal            @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  subjectUser   User            @relation("UserAttestations", fields: [subjectUserId], references: [id], onDelete: Cascade)
+
+  @@index([subjectUserId, createdAt(sort: Desc)], map: "attestations_subject_idx")
+  @@index([dealId], map: "attestations_deal_idx")
+  @@map("attestations")
+}
+
+model IntegrationHook {
+  id           String   @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
+  partnerName  String   @map("partner_name")
+  webhookUrl   String   @map("webhook_url")
+  scope        String
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("integration_hooks")
+}
+
+model PriceSnapshot {
+  id        String   @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
+  dealId    String   @db.Uuid @map("deal_id")
+  feedId    String   @map("feed_id")
+  price     Decimal  @db.Numeric(14, 6)
+  slot      BigInt
+  takenAt   DateTime @default(now()) @map("taken_at")
+
+  // Relations
+  deal      Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  @@index([dealId], map: "price_snapshots_deal_idx")
+  @@map("price_snapshots")
+}
