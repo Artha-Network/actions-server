@@ -2,30 +2,20 @@
 
 HTTP endpoint to prepare funding of an escrow.
 
-- Type: Route
+- Type: Route (legacy shim)
 - Location: `actions-server/src/routes/fund/index.ts`
 - Method: `POST /api/escrow/fund`
 
 ## Input
 
-`FundEscrowInput` — see `actions-server/src/types/escrow.ts`
+`FundActionInput` — see `actions-server/src/types/actions.ts`
 
 ## Output
 
-`FundEscrowResult`
-
-```
-{
-  "kind": "FUND",
-  "dealId": "DEAL-XXXXXX",
-  "transactionBase64": "<base64>",
-  "recentBlockhash": "<blockhash>",
-  "feePayer": null,
-  "simulation": { "unitsConsumed": 10000, "logs": ["..."] }
-}
-```
+`ActionResponse` — mirrors `/actions/fund`
 
 ### Updates
 
 - v1.0.0 — Initial creation
 - v1.1.0 — Structured tx payloads
+- v1.2.0 — Proxies to `/actions/fund`

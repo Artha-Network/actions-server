@@ -6,6 +6,7 @@
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL") // include ?schema=artha
+  directUrl = env("DIRECT_URL")
 }
 
 generator client {
@@ -48,6 +49,12 @@ enum AttestationKind {
   @@map("attestation_kind")
 }
 
+enum SolanaNetwork {
+  DEVNET @map("devnet")
+  TESTNET @map("testnet")
+  @@map("solana_network")
+}
+
 /////////////////////////
 // Models (tables)
 /////////////////////////
@@ -56,10 +63,13 @@ model User {
   /// Primary key (generated in DB by gen_random_uuid()).
   id               String   @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
   walletPublicKey  String?  @unique @map("wallet_public_key")
+  walletAddress    String?  @unique @map("wallet_address")
   emailAddress     String?  @unique @map("email_address")
   displayName      String?  @map("display_name")
   kycLevel         Int      @default(0) @map("kyc_level")
-  reputationScore  Decimal  @default(0) @db.Numeric(5, 2) @map("reputation_score")
+  reputationScore  Decimal  @default(0) @db.Decimal(5, 2) @map("reputation_score")
+  network          SolanaNetwork @default(DEVNET)
+  lastSeenAt       DateTime @default(now()) @map("last_seen_at")
   createdAt        DateTime @default(now()) @map("created_at")
   updatedAt        DateTime @default(now()) @map("updated_at")
 
@@ -78,13 +88,16 @@ model Deal {
   // Foreign keys
   sellerId          String      @db.Uuid @map("seller_id")
   buyerId           String      @db.Uuid @map("buyer_id")
+  sellerWallet      String?     @map("seller_wallet")
+  buyerWallet       String?     @map("buyer_wallet")
 
   // Relations
   seller            User        @relation("SellerDeals", fields: [sellerId], references: [id], onDelete: Restrict)
   buyer             User        @relation("BuyerDeals",  fields: [buyerId],  references: [id], onDelete: Restrict)
 
   arbiterPubkey     String      @map("arbiter_pubkey")
-  priceUsd          Decimal     @db.Numeric(12, 2) @map("price_usd")
+  onchainAddress    String      @map("onchain_address")
+  priceUsd          Decimal     @db.Decimal(12, 2) @map("price_usd")
   depositTokenMint  String      @map("deposit_token_mint")
   vaultAta          String      @map("vault_ata")
   status            DealStatus
@@ -101,6 +114,7 @@ model Deal {
   tickets           ResolveTicket[]
   attestations      Attestation[]
   priceSnapshots    PriceSnapshot[]
+  onchainEvents     OnchainEvent[]
 
   @@index([sellerId, createdAt(sort: Desc)], map: "deals_seller_created_idx")
   @@index([buyerId, createdAt(sort: Desc)],  map: "deals_buyer_created_idx")
@@ -130,7 +144,7 @@ model ResolveTicket {
   dealId         String       @db.Uuid @map("deal_id")
   finalAction    TicketAction @map("final_action")
   sellerBps      Int?         @map("seller_bps")      // if SPLIT, seller share in bps
-  confidence     Decimal      @db.Numeric(3, 2)
+  confidence     Decimal      @db.Decimal(3, 2)
   rationaleCid   String       @map("rationale_cid")
   arbiterPubkey  String       @map("arbiter_pubkey")
   signature      String
@@ -178,7 +192,7 @@ model PriceSnapshot {
   id        String   @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
   dealId    String   @db.Uuid @map("deal_id")
   feedId    String   @map("feed_id")
-  price     Decimal  @db.Numeric(14, 6)
+  price     Decimal  @db.Decimal(14, 6)
   slot      BigInt
   takenAt   DateTime @default(now()) @map("taken_at")
 
@@ -187,4 +201,20 @@ model PriceSnapshot {
 
   @@index([dealId], map: "price_snapshots_deal_idx")
   @@map("price_snapshots")
+}
+
+model OnchainEvent {
+  id          String   @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
+  dealId      String   @db.Uuid @map("deal_id")
+  txSig       String   @map("tx_sig")
+  slot        BigInt
+  instruction String
+  mint        String?
+  amount      Decimal? @db.Decimal(20, 0)
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  deal        Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+
+  @@index([dealId], map: "onchain_events_deal_idx")
+  @@map("onchain_events")
 }

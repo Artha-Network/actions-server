@@ -4,7 +4,7 @@ import { escrowService } from "../../services/escrow-service";
 /** POST /api/escrow/dispute */
 export async function disputeHandler(req: Request, res: Response) {
   try {
-    const result = await escrowService.dispute(req.body);
+    const result = await escrowService.dispute();
     res.status(200).json(result);
   } catch (e: any) {
     res.status(400).json({ error: e?.message ?? "bad_request" });

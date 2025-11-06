@@ -2,15 +2,15 @@
 
 HTTP endpoint to initiate a new escrow draft.
 
-- Type: Route
+- Type: Route (legacy shim)
 - Location: `actions-server/src/routes/initiate/index.ts`
 - Method: `POST /api/escrow/initiate`
 
 ## Input
-`InitiateEscrowInput` — see `actions-server/src/types/escrow.ts`
+`InitiateActionInput` — see `actions-server/src/types/actions.ts`
 
 ## Output
-`InitiateEscrowResult` — `{ dealId: string, status: "INITIATED" }`
+`ActionResponse` — matches `/actions/initiate`
 
 ## Interactions
 - Called by web-app feature API
@@ -18,4 +18,4 @@ HTTP endpoint to initiate a new escrow draft.
 
 ### Updates
 - v1.0.0 — Initial creation
-
+- v1.1.0 — Proxies to `/actions/initiate`
