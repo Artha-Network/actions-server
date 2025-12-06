@@ -3,7 +3,7 @@
  * Exposes POST /api/users to find or create a user by wallet address.
  */
 import express from "express";
-import { findOrCreateUser } from "../services/user.service";
+import { createUserIfMissing } from "../services/user.service";
 
 const router = express.Router();
 
@@ -13,12 +13,15 @@ router.post("/", async (req, res) => {
     return res.status(400).json({ error: "walletAddress is required" });
   }
   try {
-    const user = await findOrCreateUser(walletAddress);
+    const user = await createUserIfMissing(walletAddress);
     return res.json(user);
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error("/api/users error", e);
-    return res.status(500).json({ error: "Internal Server Error" });
+    return res.status(500).json({
+      error: "Internal Server Error",
+      details: e instanceof Error ? e.message : String(e)
+    });
   }
 });
 

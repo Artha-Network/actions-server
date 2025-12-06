@@ -1,5 +1,5 @@
 import { randomUUID } from "crypto";
-import { Prisma, PrismaClient, DealStatus } from "@prisma/client";
+import { Prisma, DealStatus } from "@prisma/client";
 import { PublicKey, SystemProgram, TransactionInstruction, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import { createTransferCheckedInstruction, TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import {
@@ -20,10 +20,9 @@ import { upsertWalletIdentity } from "./user.service";
 import { logAction } from "../utils/logger";
 import { isBase58Address } from "../utils/validation";
 import { connection } from "../config/solana";
+import { prisma } from "../lib/prisma";
 
-const prisma = new PrismaClient();
 
-const USDC_DECIMALS = 6;
 
 interface ServiceOptions {
   reqId?: string;
@@ -166,6 +165,7 @@ export class EscrowService {
           usdPriceSnapshot,
           feeBps: input.feeBps,
           status: DealStatus.INIT,
+          title: input.title,
         },
       });
     } else {
@@ -185,6 +185,7 @@ export class EscrowService {
           disputeDeadline: new Date(disputeAt * 1000),
           usdPriceSnapshot,
           feeBps: input.feeBps,
+          title: input.title,
         },
       });
     }
@@ -198,7 +199,7 @@ export class EscrowService {
 
     // Get arbiter pubkey
     const arbiterPubkey = input.arbiterWallet ? new PublicKey(input.arbiterWallet) : sellerPubkey;
-    
+
     // Derive vault authority PDA
     const [vaultAuthority, vaultBump] = PublicKey.findProgramAddressSync(
       [Buffer.from("vault"), escrowPda.toBuffer()],
@@ -222,6 +223,13 @@ export class EscrowService {
       ],
       data,
     });
+
+    console.log("Initiate Transaction Keys:");
+    console.log("Seller:", sellerPubkey.toBase58());
+    console.log("Buyer:", buyerPubkey.toBase58());
+    console.log("Arbiter:", arbiterPubkey.toBase58());
+    console.log("Mint:", solanaConfig.usdcMint.toBase58());
+    console.log("Escrow PDA:", escrowPda.toBase58());
 
     const payerKey = derivePayer(sellerPubkey);
     const txResult = await buildVersionedTransaction([instruction], payerKey);
@@ -286,7 +294,7 @@ export class EscrowService {
       vaultAtaInfo.ata,
       buyerPubkey,
       amountUnits,
-      USDC_DECIMALS
+      solanaConfig.usdcDecimals
     );
 
     const data = Buffer.concat([FUND_DISCRIMINATOR, u64ToBuffer(amountUnits)]);
@@ -534,9 +542,7 @@ export class EscrowService {
     };
   }
 
-  async dispute(): Promise<never> {
-    throw new Error("Dispute handling moved to /actions endpoints");
-  }
 }
+
 
 export const escrowService = new EscrowService();

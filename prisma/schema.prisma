@@ -97,6 +97,7 @@ model Deal {
 
   arbiterPubkey     String      @map("arbiter_pubkey")
   onchainAddress    String      @map("onchain_address")
+  title             String?     @map("title")
   priceUsd          Decimal     @db.Decimal(12, 2) @map("price_usd")
   depositTokenMint  String      @map("deposit_token_mint")
   vaultAta          String      @map("vault_ata")

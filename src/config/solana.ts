@@ -12,14 +12,14 @@ const CLUSTER_ENV =
   "localnet";
 
 const normalizedCluster = CLUSTER_ENV.toLowerCase();
-const SOLANA_CLUSTER: SolanaCluster = 
+const SOLANA_CLUSTER: SolanaCluster =
   normalizedCluster === "testnet" ? "testnet" :
-  normalizedCluster === "mainnet-beta" ? "mainnet-beta" :
-  normalizedCluster === "localnet" || normalizedCluster === "localhost" ? "localnet" :
-  "devnet";
+    normalizedCluster === "mainnet-beta" ? "mainnet-beta" :
+      normalizedCluster === "localnet" || normalizedCluster === "localhost" ? "localnet" :
+        "devnet";
 
 // Use custom RPC for localnet, otherwise use default cluster API
-const DEFAULT_RPC_URL = SOLANA_CLUSTER === "localnet" 
+const DEFAULT_RPC_URL = SOLANA_CLUSTER === "localnet"
   ? "http://127.0.0.1:8899"
   : clusterApiUrl(SOLANA_CLUSTER === "mainnet-beta" ? "mainnet-beta" : SOLANA_CLUSTER === "testnet" ? "testnet" : "devnet");
 
@@ -48,6 +48,7 @@ export const solanaConfig = {
   usdcMint: USDC_MINT,
   sponsoredFees: FEATURE_SPONSORED_FEES,
   feePayer: FEE_PAYER,
+  usdcDecimals: 6,
 } as const;
 
 export type SolanaConfig = typeof solanaConfig;

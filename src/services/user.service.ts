@@ -1,78 +1,44 @@
 /**
  * User Service
- * Provides functions to manage users in the database using Prisma.
+ * User CRUD helpers using Supabase admin client.
  */
-import { PrismaClient, SolanaNetwork } from "@prisma/client";
+import { supabaseAdmin } from "../lib/supabaseAdmin";
 
-const prisma = new PrismaClient();
+export type WalletNetwork = "devnet" | "testnet" | "localnet";
 
-export type WalletNetwork = "devnet" | "testnet";
+export const createUserIfMissing = async (walletAddress: string) => {
+  const { data, error } = await supabaseAdmin
+    .from("users")
+    .upsert({
+      wallet_address: walletAddress,
+      wallet_public_key: walletAddress,
+      last_seen_at: new Date().toISOString()
+    }, { onConflict: 'wallet_address' })
+    .select()
+    .single();
 
-const toSolanaNetwork = (network: WalletNetwork): SolanaNetwork =>
-  network === "testnet" ? SolanaNetwork.TESTNET : SolanaNetwork.DEVNET;
-
-const now = () => new Date();
-
-/**
- * findOrCreateUser
- * Idempotently returns a user by wallet address; creates one if it does not exist.
- */
-export const findOrCreateUser = async (walletAddress: string) => {
-  const solanaNetwork = SolanaNetwork.DEVNET;
-  const timestamp = now();
-
-  return prisma.user.upsert({
-    where: { walletAddress },
-    create: {
-      walletAddress,
-      walletPublicKey: walletAddress,
-      network: solanaNetwork,
-      lastSeenAt: timestamp,
-    },
-    update: {
-      walletPublicKey: walletAddress,
-      lastSeenAt: timestamp,
-      updatedAt: timestamp,
-    },
-  });
+  if (error) throw new Error(error.message);
+  return data;
 };
 
-/**
- * upsertWalletIdentity
- * Upserts a user record keyed by walletAddress and maintains identity metadata.
- */
-export const upsertWalletIdentity = async (walletAddress: string, network: WalletNetwork) => {
-  const solanaNetwork = toSolanaNetwork(network);
-  const timestamp = now();
+export const upsertWalletIdentity = async (walletAddress: string, network: string) => {
+  const { data, error } = await supabaseAdmin
+    .from("users")
+    .upsert({
+      wallet_address: walletAddress,
+      wallet_public_key: walletAddress,
+      network: network === 'testnet' ? 'testnet' : 'devnet',
+      last_seen_at: new Date().toISOString()
+    }, { onConflict: 'wallet_address' })
+    .select()
+    .single();
 
-  const user = await prisma.user.upsert({
-    where: { walletAddress },
-    create: {
-      walletAddress,
-      walletPublicKey: walletAddress,
-      network: solanaNetwork,
-      lastSeenAt: timestamp,
-    },
-    update: {
-      walletPublicKey: walletAddress,
-      network: solanaNetwork,
-      lastSeenAt: timestamp,
-      updatedAt: timestamp,
-    },
-    select: {
-      id: true,
-      walletAddress: true,
-      network: true,
-      lastSeenAt: true,
-    },
-  });
+  if (error) throw new Error(error.message);
 
   return {
-    userId: user.id,
-    walletAddress: user.walletAddress,
-    network,
-    lastSeenAt: user.lastSeenAt,
+    userId: data.id,
+    walletAddress: data.wallet_address,
+    network: data.network,
+    lastSeenAt: new Date(data.last_seen_at),
   };
 };
-
-// Named exports only per coding convention

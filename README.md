@@ -1,109 +1,28 @@
-# actions-server
+# Actions Server
 
-Solana Actions &amp; Blinks endpoints that return ready-to-sign transactions; owns fee-payer policy.
+The backend service for the Artha Network, handling Solana Actions (Blinks), escrow logic, and database interactions.
 
----
+## Overview
+This server exposes endpoints for:
+- **Escrow Operations**: Initiate, Fund, Release, Refund, Dispute.
+- **User Management**: Wallet identity and profile management via Supabase.
+- **Events**: Indexing and retrieving on-chain events.
+- **Deals**: Managing deal state and history.
 
-# Actions Server (Solana Actions & Blinks)
+## Tech Stack
+- **Runtime**: Node.js (TypeScript)
+- **Framework**: Express.js
+- **Database**: Supabase (PostgreSQL) & Prisma ORM
+- **Blockchain**: Solana Web3.js & SPL Token
+- **AI**: Gemini API (via Arbiter Service)
 
-Generates **ready-to-sign** base64 transactions for the escrow flow. Also exposes Blink metadata for link-driven UX. Implements **fee-payer** policy for gas-sponsored onboarding.
+## Setup
+1. Copy `.env.example` to `.env` and fill in the required values.
+2. Run `npm install` to install dependencies.
+3. Run `npm run dev` to start the development server.
 
-## Endpoints
-
-**Actions API (preferred)**
-- `POST /actions/initiate`
-- `POST /actions/fund`
-- `POST /actions/release`
-- `POST /actions/refund`
-- `POST /actions/confirm`
-
-**Legacy (deprecated)**
-- `POST /api/escrow/initiate`
-- `POST /api/escrow/fund`
-- `POST /api/escrow/release`
-- `POST /api/escrow/dispute`
-
-**Auth & health**
-- `POST /auth/upsert-wallet`
-- `GET  /health`
-
-### Example Request
-
-```http
-POST /actions/fund
-Content-Type: application/json
-
-{
-  "dealId": "8b2e29e5-87a7-4b89-8e8f-fca44ef2b60d",
-  "buyerWallet": "<buyer pubkey>",
-  "amount": "125.00"
-}
-```
-
-Run
-
-pnpm i
-pnpm --filter actions-server dev
-
-```
-
-Build & Start
-```
-
-pnpm --filter actions-server build
-pnpm --filter actions-server start
-
-```
-
-Environment
-| Var                       | Description                                  |
-| ------------------------- | -------------------------------------------- |
-| `SOLANA_RPC_URL`          | Solana RPC endpoint (devnet/testnet)         |
-| `PROGRAM_ID`              | Escrow program ID                            |
-| `USDC_MINT`               | USDC mint used for escrow                    |
-| `NEXT_PUBLIC_SOLANA_CLUSTER` | Cluster hint (`devnet`/`testnet`)         |
-| `FEATURE_SPONSORED_FEES`  | `true` enables fee sponsorship               |
-| `FEE_PAYER_PUBKEY`        | Fee payer public key when sponsorship is on  |
-| `ACTIONS_PUBLIC_BASEURL`  | for Blink links                              |
-| `RATE_LIMIT_PER_MIN`      | anti-abuse                                   |
-| `SUPABASE_URL`            | Supabase project URL                         |
-| `SUPABASE_SERVICE_ROLE`   | Supabase service role key (server only)      |
-| `DATABASE_URL`            | Postgres connection string (?schema=artha)   |
-
-Test
-pnpm test       # unit
-pnpm test:e2e   # endpoint simulation (requires RPC)
-Security
-
-All txs simulate before returning
-
-IP & wallet rate limiting for fee-payer
-
-Strict DTO validation (zod/class-validator)
-
-## Deal State Machine
-
-```
-INIT --(confirm FUND)--> FUNDED --(confirm RELEASE)--> RELEASED
-                          |
-                          \--(confirm REFUND)--> REFUNDED
-```
-
-- `/actions/*` endpoints validate the acting wallet before building transactions.
-- `/actions/confirm` persists `onchain_events` records and enforces these transitions.
-
-## Supabase RLS Policies
-
-Row level security SQL files live in `supabase/rls/`:
-
-- `users.sql` — wallets can read their own profile; service role writes.
-- `deals.sql` — wallets can read deals where they are buyer or seller.
-- `onchain_events.sql` — wallets can read events for their deals.
-- `evidence.sql` — wallets can read evidence they uploaded or related deals.
-
-Only the Supabase service role (`SUPABASE_SERVICE_ROLE`) can insert or update on stateful tables; clients use the anon key for read access.
-
-License
-
-MIT
-```
+## Key Directories
+- `src/routes`: API route definitions.
+- `src/services`: Business logic and external service integrations.
+- `src/solana`: Solana-specific helpers and transaction building.
+- `src/lib`: Shared utilities and libraries.

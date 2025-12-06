@@ -9,7 +9,7 @@ import { isBase58Address } from "../utils/validation";
 const router = express.Router();
 
 const isSupportedNetwork = (network: unknown): network is WalletNetwork =>
-  network === "devnet" || network === "testnet";
+  network === "devnet" || network === "testnet" || network === "localnet";
 
 router.post("/upsert-wallet", async (req, res) => {
   const { walletAddress, network } = req.body ?? {};

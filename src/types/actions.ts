@@ -16,7 +16,9 @@ export const InitiateActionSchema = z.object({
   deliverBy: z.number().int().optional(),
   disputeDeadline: z.number().int().optional(),
   description: z.string().max(512).optional(),
+  title: z.string().max(100).optional(),
   clientDealId: z.string().uuid().optional(),
+  payer: WalletSchema,
 });
 
 export type InitiateActionInput = z.infer<typeof InitiateActionSchema>;

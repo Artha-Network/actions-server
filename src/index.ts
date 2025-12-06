@@ -11,6 +11,7 @@ import authRouter from "./routes/auth.route";
 import actionsRouter from "./routes/actions.route";
 import eventsRouter from "./routes/events.route";
 import dealsRouter from "./routes/deals.route";
+import aiRouter from "./routes/ai.route";
 
 const app = express();
 
@@ -29,6 +30,7 @@ app.post("/api/escrow/dispute", disputeHandler);
 app.use("/api/users", userRouter);
 app.use("/api/events", eventsRouter);
 app.use("/api/deals", dealsRouter);
+app.use("/api/ai", aiRouter);
 app.use("/auth", authRouter);
 app.use("/actions", actionsRouter);
 

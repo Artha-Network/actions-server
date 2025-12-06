@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { findOrCreateUser } from '../services/user.service';
+import { createUserIfMissing } from '../services/user.service';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -8,11 +8,11 @@ const prisma = new PrismaClient();
 // GET /api/deals - Get deals for a user
 router.get('/', async (req, res) => {
   try {
-    const { 
-      wallet_address, 
-      offset = 0, 
+    const {
+      wallet_address,
+      offset = 0,
       limit = 12,
-      status 
+      status
     } = req.query;
 
     if (!wallet_address || typeof wallet_address !== 'string') {
@@ -20,7 +20,7 @@ router.get('/', async (req, res) => {
     }
 
     // Ensure user exists in database before querying deals
-    await findOrCreateUser(wallet_address);
+    await createUserIfMissing(wallet_address);
 
     let whereClause: any = {
       OR: [
@@ -37,6 +37,7 @@ router.get('/', async (req, res) => {
       where: whereClause,
       select: {
         id: true,
+        title: true,
         status: true,
         priceUsd: true,
         buyerWallet: true,
@@ -52,9 +53,9 @@ router.get('/', async (req, res) => {
 
     const total = await prisma.deal.count({ where: whereClause });
 
-    res.json({ 
-      deals: deals || [], 
-      total: total || 0 
+    res.json({
+      deals: deals || [],
+      total: total || 0
     });
   } catch (error) {
     console.error('Failed to fetch deals:', error);
@@ -66,7 +67,7 @@ router.get('/', async (req, res) => {
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    
+
     const deal = await prisma.deal.findUnique({
       where: { id },
       include: {
@@ -89,9 +90,9 @@ router.get('/:id', async (req, res) => {
 // GET /api/deals/events - Get recent deal events
 router.get('/events/recent', async (req, res) => {
   try {
-    const { 
+    const {
       wallet_address,
-      limit = 6 
+      limit = 6
     } = req.query;
 
     if (!wallet_address || typeof wallet_address !== 'string') {
@@ -99,7 +100,7 @@ router.get('/events/recent', async (req, res) => {
     }
 
     // Ensure user exists in database before querying events
-    await findOrCreateUser(wallet_address);
+    await createUserIfMissing(wallet_address);
 
     // Get deals for this wallet first
     const userDeals = await prisma.deal.findMany({
@@ -144,6 +145,34 @@ router.get('/events/recent', async (req, res) => {
   } catch (error) {
     console.error('Failed to fetch deal events:', error);
     res.status(500).json({ error: 'Failed to fetch deal events' });
+  }
+});
+
+// DELETE /api/deals/:id - Delete a deal (only if INIT)
+router.delete('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const deal = await prisma.deal.findUnique({
+      where: { id }
+    });
+
+    if (!deal) {
+      return res.status(404).json({ error: 'Deal not found' });
+    }
+
+    if (deal.status !== 'INIT') {
+      return res.status(400).json({ error: 'Only deals in INIT status can be deleted' });
+    }
+
+    await prisma.deal.delete({
+      where: { id }
+    });
+
+    res.json({ success: true, message: 'Deal deleted successfully' });
+  } catch (error) {
+    console.error('Failed to delete deal:', error);
+    res.status(500).json({ error: 'Failed to delete deal' });
   }
 });
 
