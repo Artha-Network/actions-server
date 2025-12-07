@@ -19,8 +19,9 @@ import { dealIdToBigInt, ensureDealId, getEscrowPda } from "../utils/deal";
 import { upsertWalletIdentity } from "./user.service";
 import { logAction } from "../utils/logger";
 import { isBase58Address } from "../utils/validation";
-import { connection } from "../config/solana";
+import { connection, rpcManager } from "../config/solana";
 import { prisma } from "../lib/prisma";
+import { withRpcRetry } from "../utils/rpc-retry";
 
 
 
@@ -120,7 +121,14 @@ export class EscrowService {
       buyer: buyerPubkey,
       mint: solanaConfig.usdcMint,
     });
-    const vaultAta = deriveAta(solanaConfig.usdcMint, escrowPda, true);
+
+    // Derive vault authority PDA
+    const [vaultAuthority, vaultBump] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vault"), escrowPda.toBuffer()],
+      solanaConfig.programId
+    );
+
+    const vaultAta = deriveAta(solanaConfig.usdcMint, vaultAuthority, true);
 
     const [sellerIdentity, buyerIdentity] = await Promise.all([
       upsertWalletIdentity(input.sellerWallet, solanaConfig.cluster),
@@ -200,16 +208,13 @@ export class EscrowService {
     // Get arbiter pubkey
     const arbiterPubkey = input.arbiterWallet ? new PublicKey(input.arbiterWallet) : sellerPubkey;
 
-    // Derive vault authority PDA
-    const [vaultAuthority, vaultBump] = PublicKey.findProgramAddressSync(
-      [Buffer.from("vault"), escrowPda.toBuffer()],
-      solanaConfig.programId
-    );
+    // Vault authority PDA derivation moved up
 
     const instruction = new TransactionInstruction({
       programId: solanaConfig.programId,
       keys: [
         { pubkey: sellerPubkey, isSigner: true, isWritable: true },
+        { pubkey: sellerPubkey, isSigner: false, isWritable: false },
         { pubkey: buyerPubkey, isSigner: false, isWritable: false },
         { pubkey: arbiterPubkey, isSigner: false, isWritable: false },
         { pubkey: solanaConfig.usdcMint, isSigner: false, isWritable: false },
@@ -463,8 +468,10 @@ export class EscrowService {
       throw new Error("Invalid actor wallet");
     }
 
-    const statusResp = await connection.getSignatureStatuses([input.txSig], { searchTransactionHistory: true });
-    const signatureStatus = statusResp.value[0];
+    const statusResp = await withRpcRetry(
+      async (conn) => conn.getSignatureStatuses([input.txSig], { searchTransactionHistory: true }),
+      { endpointManager: rpcManager }
+    ); const signatureStatus = statusResp.value[0];
     if (!signatureStatus) throw new Error("Transaction not found");
     if (signatureStatus.err) throw new Error("Transaction failed");
 
