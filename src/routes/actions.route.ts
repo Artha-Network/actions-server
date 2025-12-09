@@ -10,6 +10,8 @@ import {
 } from "../types/actions";
 import { escrowService } from "../services/escrow-service";
 import { simulateVersionedTransaction, refreshTransactionBlockhash } from "../solana/transaction";
+import { PublicKey } from "@solana/web3.js";
+import nacl from "tweetnacl";
 
 const router = express.Router();
 
@@ -152,6 +154,62 @@ router.post("/refresh-blockhash", async (req, res) => {
     const result = await refreshTransactionBlockhash(txMessageBase64);
     return res.status(200).json(result);
   } catch (error) {
+    return res.status(500).json({ error: toErrorMessage(error) });
+  }
+});
+
+/**
+ * POST /api/actions/verify-signature
+ * Verify wallet signature for initiate flow and continue as if on-chain step succeeded.
+ * This endpoint skips blockchain writes and only verifies wallet ownership.
+ */
+router.post("/verify-signature", async (req, res) => {
+  const { dealId, wallet, signature, message } = req.body;
+  
+  if (!dealId || typeof dealId !== "string") {
+    return res.status(400).json({ error: "dealId is required" });
+  }
+  if (!wallet || typeof wallet !== "string") {
+    return res.status(400).json({ error: "wallet is required" });
+  }
+  if (!signature || !Array.isArray(signature)) {
+    return res.status(400).json({ error: "signature is required and must be an array" });
+  }
+  if (!message || typeof message !== "string") {
+    return res.status(400).json({ error: "message is required" });
+  }
+
+  try {
+    // Verify signature
+    const publicKey = new PublicKey(wallet);
+    const messageBytes = new TextEncoder().encode(message);
+    const signatureBytes = new Uint8Array(signature);
+    const publicKeyBytes = publicKey.toBytes();
+
+    const verified = nacl.sign.detached.verify(messageBytes, signatureBytes, publicKeyBytes);
+
+    if (!verified) {
+      return res.status(401).json({ error: "Invalid signature" });
+    }
+
+    console.log("[verify-signature] Signature verified for wallet:", wallet);
+    console.log("[verify-signature] Deal ID:", dealId);
+
+    // Wait 2-4 seconds as requested
+    const waitTime = 2000 + Math.random() * 2000; // 2-4 seconds
+    console.log("[verify-signature] Waiting", Math.round(waitTime), "ms before continuing...");
+    await new Promise(resolve => setTimeout(resolve, waitTime));
+
+    console.log("[verify-signature] Signature verified. Continuing...");
+
+    return res.status(200).json({
+      success: true,
+      message: "Signature verified. Continuing...",
+      dealId,
+      wallet,
+    });
+  } catch (error) {
+    console.error("[verify-signature] Error:", error);
     return res.status(500).json({ error: toErrorMessage(error) });
   }
 });

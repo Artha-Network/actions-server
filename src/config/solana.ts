@@ -10,7 +10,7 @@ const CLUSTER_ENV =
   process.env.NEXT_PUBLIC_SOLANA_CLUSTER ??
   process.env.SOLANA_CLUSTER ??
   process.env.CLUSTER ??
-  "localnet";
+  "devnet";
 
 const normalizedCluster = CLUSTER_ENV.toLowerCase();
 const SOLANA_CLUSTER: SolanaCluster =

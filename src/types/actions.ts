@@ -74,9 +74,10 @@ export type ConfirmActionInput = z.infer<typeof ConfirmActionSchema>;
 
 export type ActionResponse = {
   dealId: string;
-  txMessageBase64: string;
+  txMessageBase64?: string;
+  verificationMessage?: string;
   nextClientAction?: string;
-  latestBlockhash: string;
-  lastValidBlockHeight: number;
-  feePayer: string;
+  latestBlockhash?: string;
+  lastValidBlockHeight?: number;
+  feePayer?: string;
 };
