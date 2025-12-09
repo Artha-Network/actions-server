@@ -36,21 +36,19 @@ function toPublicKey(value: string | PublicKey): PublicKey {
 }
 
 interface EscrowSeedsInput {
-  seller: string | PublicKey;
-  buyer: string | PublicKey;
-  mint: string | PublicKey;
+  dealId: string; // UUID string - required for PDA seeds
 }
 
-export function getEscrowPda({ seller, buyer, mint }: EscrowSeedsInput) {
-  const sellerPk = toPublicKey(seller);
-  const buyerPk = toPublicKey(buyer);
-  const mintPk = toPublicKey(mint);
+/**
+ * Derives the EscrowState PDA using only deal_id as per architecture:
+ * PDA seeds: ["escrow", deal_id_bytes]
+ */
+export function getEscrowPda({ dealId }: EscrowSeedsInput) {
+  const dealIdBytes = dealIdToBytes(dealId);
 
   const seeds = [
     Buffer.from("escrow"),
-    sellerPk.toBuffer(),
-    buyerPk.toBuffer(),
-    mintPk.toBuffer(),
+    dealIdBytes, // deal_id as bytes (16 bytes)
   ];
   const [publicKey, bump] = PublicKey.findProgramAddressSync(seeds, solanaConfig.programId);
   return { publicKey, bump };

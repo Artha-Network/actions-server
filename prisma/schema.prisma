@@ -4,8 +4,8 @@
 // ============================================================
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL") // include ?schema=artha
+  provider  = "postgresql"
+  url       = env("DATABASE_URL") // include ?schema=artha
   directUrl = env("DIRECT_URL")
 }
 
@@ -25,6 +25,7 @@ enum DealStatus {
   RESOLVED
   RELEASED
   REFUNDED
+
   @@map("deal_status")
 }
 
@@ -32,12 +33,14 @@ enum TicketAction {
   RELEASE
   REFUND
   SPLIT
+
   @@map("ticket_action")
 }
 
 enum TicketSource {
   AI
   HUMAN
+
   @@map("ticket_source")
 }
 
@@ -46,12 +49,14 @@ enum AttestationKind {
   DEAL_DEFAULT
   BUYER_GOOD
   SELLER_GOOD
+
   @@map("attestation_kind")
 }
 
 enum SolanaNetwork {
-  DEVNET @map("devnet")
+  DEVNET  @map("devnet")
   TESTNET @map("testnet")
+
   @@map("solana_network")
 }
 
@@ -61,117 +66,119 @@ enum SolanaNetwork {
 
 model User {
   /// Primary key (generated in DB by gen_random_uuid()).
-  id               String   @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
-  walletPublicKey  String?  @unique @map("wallet_public_key")
-  walletAddress    String?  @unique @map("wallet_address")
-  emailAddress     String?  @unique @map("email_address")
-  displayName      String?  @map("display_name")
-  kycLevel         Int      @default(0) @map("kyc_level")
-  reputationScore  Decimal  @default(0) @db.Decimal(5, 2) @map("reputation_score")
-  network          SolanaNetwork @default(DEVNET)
-  lastSeenAt       DateTime @default(now()) @map("last_seen_at")
-  createdAt        DateTime @default(now()) @map("created_at")
-  updatedAt        DateTime @default(now()) @map("updated_at")
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  walletPublicKey String?       @unique @map("wallet_public_key")
+  walletAddress   String?       @unique @map("wallet_address")
+  emailAddress    String?       @unique @map("email_address")
+  displayName     String?       @map("display_name")
+  kycLevel        Int           @default(0) @map("kyc_level")
+  reputationScore Decimal       @default(0) @map("reputation_score") @db.Decimal(5, 2)
+  network         SolanaNetwork @default(DEVNET)
+  lastSeenAt      DateTime      @default(now()) @map("last_seen_at")
+  createdAt       DateTime      @default(now()) @map("created_at")
+  updatedAt       DateTime      @default(now()) @map("updated_at")
 
   // Relations
-  dealsAsSeller    Deal[]   @relation("SellerDeals")
-  dealsAsBuyer     Deal[]   @relation("BuyerDeals")
+  dealsAsSeller     Deal[]        @relation("SellerDeals")
+  dealsAsBuyer      Deal[]        @relation("BuyerDeals")
   submittedEvidence Evidence[]
-  attestations     Attestation[] @relation("UserAttestations")
+  attestations      Attestation[] @relation("UserAttestations")
+  // DB has a CHECK that either wallet_public_key or email_address is not null
 
   @@map("users")
-  // DB has a CHECK that either wallet_public_key or email_address is not null
 }
 
 model Deal {
-  id                String      @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
+  id           String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   // Foreign keys
-  sellerId          String      @db.Uuid @map("seller_id")
-  buyerId           String      @db.Uuid @map("buyer_id")
-  sellerWallet      String?     @map("seller_wallet")
-  buyerWallet       String?     @map("buyer_wallet")
+  sellerId     String  @map("seller_id") @db.Uuid
+  buyerId      String  @map("buyer_id") @db.Uuid
+  sellerWallet String? @map("seller_wallet")
+  buyerWallet  String? @map("buyer_wallet")
 
   // Relations
-  seller            User        @relation("SellerDeals", fields: [sellerId], references: [id], onDelete: Restrict)
-  buyer             User        @relation("BuyerDeals",  fields: [buyerId],  references: [id], onDelete: Restrict)
+  seller User @relation("SellerDeals", fields: [sellerId], references: [id], onDelete: Restrict)
+  buyer  User @relation("BuyerDeals", fields: [buyerId], references: [id], onDelete: Restrict)
 
-  arbiterPubkey     String      @map("arbiter_pubkey")
-  onchainAddress    String      @map("onchain_address")
-  title             String?     @map("title")
-  priceUsd          Decimal     @db.Decimal(12, 2) @map("price_usd")
-  depositTokenMint  String      @map("deposit_token_mint")
-  vaultAta          String      @map("vault_ata")
-  status            DealStatus
-  deliverDeadline   DateTime    @map("deliver_deadline")
-  disputeDeadline   DateTime    @map("dispute_deadline")
-  usdPriceSnapshot  Json        @map("usd_price_snapshot") // {feed_id, price, conf, slot}
-  feeBps            Int         @default(0) @map("fee_bps")
-  createdAt         DateTime    @default(now()) @map("created_at")
-  fundedAt          DateTime?   @map("funded_at")
-  updatedAt         DateTime    @default(now()) @map("updated_at")
+  arbiterPubkey    String     @map("arbiter_pubkey")
+  onchainAddress   String     @map("onchain_address")
+  title            String?    @map("title")
+  buyerEmail       String?    @map("buyer_email")
+  sellerEmail      String?    @map("seller_email")
+  priceUsd         Decimal    @map("price_usd") @db.Decimal(12, 2)
+  depositTokenMint String     @map("deposit_token_mint")
+  vaultAta         String     @map("vault_ata")
+  status           DealStatus
+  deliverDeadline  DateTime   @map("deliver_deadline")
+  disputeDeadline  DateTime   @map("dispute_deadline")
+  usdPriceSnapshot Json       @map("usd_price_snapshot") // {feed_id, price, conf, slot}
+  feeBps           Int        @default(0) @map("fee_bps")
+  createdAt        DateTime   @default(now()) @map("created_at")
+  fundedAt         DateTime?  @map("funded_at")
+  updatedAt        DateTime   @default(now()) @map("updated_at")
 
   // Children
-  evidence          Evidence[]
-  tickets           ResolveTicket[]
-  attestations      Attestation[]
-  priceSnapshots    PriceSnapshot[]
-  onchainEvents     OnchainEvent[]
+  evidence       Evidence[]
+  tickets        ResolveTicket[]
+  attestations   Attestation[]
+  priceSnapshots PriceSnapshot[]
+  onchainEvents  OnchainEvent[]
 
   @@index([sellerId, createdAt(sort: Desc)], map: "deals_seller_created_idx")
-  @@index([buyerId, createdAt(sort: Desc)],  map: "deals_buyer_created_idx")
-  @@index([status],                          map: "deals_status_idx")
+  @@index([buyerId, createdAt(sort: Desc)], map: "deals_buyer_created_idx")
+  @@index([status], map: "deals_status_idx")
   @@map("deals")
 }
 
 model Evidence {
-  id             String   @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
-  dealId         String   @db.Uuid @map("deal_id")
-  submittedById  String   @db.Uuid @map("submitted_by")
-  cid            String
-  mimeType       String   @map("mime_type")
-  submittedAt    DateTime @default(now()) @map("submitted_at")
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  dealId        String   @map("deal_id") @db.Uuid
+  submittedById String   @map("submitted_by") @db.Uuid
+  cid           String
+  mimeType      String   @map("mime_type")
+  submittedAt   DateTime @default(now()) @map("submitted_at")
 
   // Relations
-  deal           Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
-  submittedBy    User     @relation(fields: [submittedById], references: [id], onDelete: Restrict)
+  deal        Deal @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  submittedBy User @relation(fields: [submittedById], references: [id], onDelete: Restrict)
 
-  @@index([dealId],        map: "evidence_deal_idx")
+  @@index([dealId], map: "evidence_deal_idx")
   @@index([submittedById], map: "evidence_submitter_idx")
   @@map("evidence")
 }
 
 model ResolveTicket {
-  id             String       @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
-  dealId         String       @db.Uuid @map("deal_id")
-  finalAction    TicketAction @map("final_action")
-  sellerBps      Int?         @map("seller_bps")      // if SPLIT, seller share in bps
-  confidence     Decimal      @db.Decimal(3, 2)
-  rationaleCid   String       @map("rationale_cid")
-  arbiterPubkey  String       @map("arbiter_pubkey")
-  signature      String
-  issuedAt       DateTime     @default(now()) @map("issued_at")
-  expiresAt      DateTime?    @map("expires_at")
-  source         TicketSource
+  id            String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  dealId        String       @map("deal_id") @db.Uuid
+  finalAction   TicketAction @map("final_action")
+  sellerBps     Int?         @map("seller_bps") // if SPLIT, seller share in bps
+  confidence    Decimal      @db.Decimal(3, 2)
+  rationaleCid  String       @map("rationale_cid")
+  arbiterPubkey String       @map("arbiter_pubkey")
+  signature     String
+  issuedAt      DateTime     @default(now()) @map("issued_at")
+  expiresAt     DateTime?    @map("expires_at")
+  source        TicketSource
 
   // Relations
-  deal           Deal         @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  deal Deal @relation(fields: [dealId], references: [id], onDelete: Cascade)
 
-  @@index([dealId],  map: "tickets_deal_idx")
-  @@index([source],  map: "tickets_source_idx")
+  @@index([dealId], map: "tickets_deal_idx")
+  @@index([source], map: "tickets_source_idx")
   @@map("resolve_tickets")
 }
 
 model Attestation {
-  id            String          @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
-  dealId        String          @db.Uuid @map("deal_id")
-  subjectUserId String          @db.Uuid @map("subject_user")
+  id            String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  dealId        String          @map("deal_id") @db.Uuid
+  subjectUserId String          @map("subject_user") @db.Uuid
   kind          AttestationKind
   scoreDelta    Int             @map("score_delta")
   createdAt     DateTime        @default(now()) @map("created_at")
 
   // Relations
-  deal          Deal            @relation(fields: [dealId], references: [id], onDelete: Cascade)
-  subjectUser   User            @relation("UserAttestations", fields: [subjectUserId], references: [id], onDelete: Cascade)
+  deal        Deal @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  subjectUser User @relation("UserAttestations", fields: [subjectUserId], references: [id], onDelete: Cascade)
 
   @@index([subjectUserId, createdAt(sort: Desc)], map: "attestations_subject_idx")
   @@index([dealId], map: "attestations_deal_idx")
@@ -179,34 +186,34 @@ model Attestation {
 }
 
 model IntegrationHook {
-  id           String   @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
-  partnerName  String   @map("partner_name")
-  webhookUrl   String   @map("webhook_url")
-  scope        String
-  isActive     Boolean  @default(true) @map("is_active")
-  createdAt    DateTime @default(now()) @map("created_at")
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  partnerName String   @map("partner_name")
+  webhookUrl  String   @map("webhook_url")
+  scope       String
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
 
   @@map("integration_hooks")
 }
 
 model PriceSnapshot {
-  id        String   @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
-  dealId    String   @db.Uuid @map("deal_id")
-  feedId    String   @map("feed_id")
-  price     Decimal  @db.Decimal(14, 6)
-  slot      BigInt
-  takenAt   DateTime @default(now()) @map("taken_at")
+  id      String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  dealId  String   @map("deal_id") @db.Uuid
+  feedId  String   @map("feed_id")
+  price   Decimal  @db.Decimal(14, 6)
+  slot    BigInt
+  takenAt DateTime @default(now()) @map("taken_at")
 
   // Relations
-  deal      Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  deal Deal @relation(fields: [dealId], references: [id], onDelete: Cascade)
 
   @@index([dealId], map: "price_snapshots_deal_idx")
   @@map("price_snapshots")
 }
 
 model OnchainEvent {
-  id          String   @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
-  dealId      String   @db.Uuid @map("deal_id")
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  dealId      String   @map("deal_id") @db.Uuid
   txSig       String   @map("tx_sig")
   slot        BigInt
   instruction String
@@ -214,7 +221,7 @@ model OnchainEvent {
   amount      Decimal? @db.Decimal(20, 0)
   createdAt   DateTime @default(now()) @map("created_at")
 
-  deal        Deal     @relation(fields: [dealId], references: [id], onDelete: Cascade)
+  deal Deal @relation(fields: [dealId], references: [id], onDelete: Cascade)
 
   @@index([dealId], map: "onchain_events_deal_idx")
   @@map("onchain_events")

@@ -19,8 +19,16 @@ router.get('/', async (req, res) => {
       return res.status(400).json({ error: 'wallet_address is required' });
     }
 
-    // Ensure user exists in database before querying deals
-    await createUserIfMissing(wallet_address);
+    // Check if user exists - don't auto-create, they should set up profile first
+    const user = await prisma.user.findUnique({
+      where: { walletAddress: wallet_address },
+      select: { id: true },
+    });
+
+    if (!user) {
+      // User doesn't exist - return empty deals list (they need to set up profile first)
+      // Don't auto-create users here
+    }
 
     let whereClause: any = {
       OR: [
@@ -38,6 +46,8 @@ router.get('/', async (req, res) => {
       select: {
         id: true,
         title: true,
+        buyerEmail: true, // This field exists in schema
+        sellerEmail: true, // This field exists in schema
         status: true,
         priceUsd: true,
         buyerWallet: true,
@@ -51,10 +61,25 @@ router.get('/', async (req, res) => {
       take: Number(limit)
     });
 
+    // Map to snake_case for frontend compatibility
+    const mappedDeals = deals.map(deal => ({
+      id: deal.id,
+      title: deal.title,
+      buyer_email: deal.buyerEmail,
+      seller_email: deal.sellerEmail,
+      status: deal.status,
+      price_usd: deal.priceUsd.toString(),
+      buyer_wallet: deal.buyerWallet,
+      seller_wallet: deal.sellerWallet,
+      deliver_deadline: deal.deliverDeadline?.toISOString() || null,
+      created_at: deal.createdAt.toISOString(),
+      updated_at: deal.updatedAt.toISOString()
+    }));
+
     const total = await prisma.deal.count({ where: whereClause });
 
     res.json({
-      deals: deals || [],
+      deals: mappedDeals || [],
       total: total || 0
     });
   } catch (error) {

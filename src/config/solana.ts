@@ -57,12 +57,24 @@ function redactUrl(url: string) {
   }
 }
 
-const PROGRAM_ID_RAW = process.env.PROGRAM_ID ?? process.env.NEXT_PUBLIC_PROGRAM_ID;
+// Default program ID (matches deployed program)
+const DEFAULT_PROGRAM_ID = "B1a1oejNg8uWz7USuuFSqmRQRUSZ95kk2e4PzRZ7Uti4";
+
+const PROGRAM_ID_RAW = process.env.PROGRAM_ID ?? process.env.NEXT_PUBLIC_PROGRAM_ID ?? DEFAULT_PROGRAM_ID;
 const USDC_MINT_RAW = process.env.USDC_MINT ?? process.env.NEXT_PUBLIC_USDC_MINT;
 
 // Helper to safely parse keys
-function parseKey(raw: string | undefined, name: string) {
+function parseKey(raw: string | undefined, name: string, fallback?: string) {
   if (!raw) {
+    if (fallback) {
+      console.warn(`[config] ${name} is missing, using fallback: ${fallback}`);
+      try {
+        return new PublicKey(fallback);
+      } catch (e) {
+        console.error(`[config] Fallback ${name} invalid: ${e}`);
+        throw e;
+      }
+    }
     console.warn(`[config] ${name} is missing, using fallback.`);
     return null;
   }
@@ -72,25 +84,23 @@ function parseKey(raw: string | undefined, name: string) {
   } catch (e) {
     console.error(`[config] ${name} invalid: '${raw}' (len: ${raw.length}) - ${e}`);
     // If env is bad, try hardcoded fallback as last resort
-    if (name === 'USDC_MINT') {
-      console.log(`[config] Falling back to hardcoded Mint.`);
-      return new PublicKey("HtwMqN2J68df7y9q8G1mLKbgfXJ6vEvBns7agrFHKHjQ");
-    }
-    if (name === 'PROGRAM_ID') {
-      console.log(`[config] Falling back to hardcoded Program ID.`);
-      return new PublicKey("HM1zYGd6WVH8e73U9QZW8spamWmLqzd391raEsfiNzEZ");
-    }
     console.warn(`[config] No fallback for ${name}, re-throwing.`);
     throw e;
   }
 }
 
-// Fallbacks if env is missing
-const DEFAULT_PROGRAM_ID = "HM1zYGd6WVH8e73U9QZW8spamWmLqzd391raEsfiNzEZ";
-const DEFAULT_USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+const PROGRAM_ID = parseKey(PROGRAM_ID_RAW, 'PROGRAM_ID', DEFAULT_PROGRAM_ID)!;
+const USDC_MINT = parseKey(USDC_MINT_RAW, 'USDC_MINT')!;
 
-const PROGRAM_ID = parseKey(PROGRAM_ID_RAW ?? DEFAULT_PROGRAM_ID, 'PROGRAM_ID')!;
-const USDC_MINT = parseKey(USDC_MINT_RAW ?? DEFAULT_USDC_MINT, 'USDC_MINT')!;
+// Log program ID on module load for debugging
+if (process.env.NODE_ENV !== 'test') {
+  console.log(`[config] Program ID: ${PROGRAM_ID.toBase58()}`);
+  if (PROGRAM_ID_RAW !== DEFAULT_PROGRAM_ID) {
+    console.log(`[config] Program ID source: Environment variable (${PROGRAM_ID_RAW === process.env.PROGRAM_ID ? 'PROGRAM_ID' : 'NEXT_PUBLIC_PROGRAM_ID'})`);
+  } else {
+    console.log(`[config] Program ID source: DEFAULT_PROGRAM_ID (code)`);
+  }
+}
 
 export { PROGRAM_ID, USDC_MINT };
 

@@ -11,15 +11,15 @@ import {
   ActionResponse,
 } from "../types/actions";
 import { solanaConfig, FEE_PAYER } from "../config/solana";
-import { getInstructionDiscriminator, u16ToBuffer, u64ToBuffer, u128ToBuffer, i64ToBuffer } from "../solana/anchor";
+import { getInstructionDiscriminator, u16ToBuffer, u64ToBuffer, i64ToBuffer } from "../solana/anchor";
 import { parseAmountToUnits, toUsdDecimalString } from "../utils/amount";
 import { buildIdempotentCreateAtaIx, deriveAta } from "../solana/token";
 import { buildVersionedTransaction } from "../solana/transaction";
-import { dealIdToBigInt, ensureDealId, getEscrowPda } from "../utils/deal";
-import { upsertWalletIdentity } from "./user.service";
+import { dealIdToBytes, ensureDealId, getEscrowPda } from "../utils/deal";
+import { upsertWalletIdentity, createUserIfMissing } from "./user.service";
 import { logAction } from "../utils/logger";
 import { isBase58Address } from "../utils/validation";
-import { connection, rpcManager } from "../config/solana";
+import { rpcManager } from "../config/solana";
 import { prisma } from "../lib/prisma";
 import { withRpcRetry } from "../utils/rpc-retry";
 
@@ -101,6 +101,18 @@ export class EscrowService {
     const reqId = resolveReqId(options);
     const startedAt = Date.now();
 
+    console.log("[initiate] ===== START INITIATE FLOW =====");
+    console.log("[initiate] Input:", {
+      sellerWallet: input.sellerWallet,
+      buyerWallet: input.buyerWallet,
+      arbiterWallet: input.arbiterWallet,
+      amount: input.amount,
+      feeBps: input.feeBps,
+      clientDealId: input.clientDealId,
+      deliverBy: input.deliverBy,
+      disputeDeadline: input.disputeDeadline,
+    });
+
     const amountUsd = toUsdDecimalString(input.amount.toString());
     const deliverAt = ensureDeadline(input.deliverBy);
     const disputeAt = ensureDeadline(input.disputeDeadline ?? deliverAt + 2 * 24 * 60 * 60);
@@ -112,41 +124,185 @@ export class EscrowService {
       deliverAt,
     };
     const dealId = ensureDealId(input.clientDealId, dealSeed);
-    const dealIdBigInt = dealIdToBigInt(dealId);
+
+    console.log("[initiate] Step 1: Deal ID Generation");
+    console.log("[initiate]   Original dealId string:", dealId);
+    console.log("[initiate]   Deal seed:", JSON.stringify(dealSeed, null, 2));
 
     const sellerPubkey = new PublicKey(input.sellerWallet);
     const buyerPubkey = new PublicKey(input.buyerWallet);
-    const { publicKey: escrowPda } = getEscrowPda({
-      seller: sellerPubkey,
-      buyer: buyerPubkey,
-      mint: solanaConfig.usdcMint,
-    });
+    const arbiterPubkey = input.arbiterWallet ? new PublicKey(input.arbiterWallet) : sellerPubkey;
 
-    // Derive vault authority PDA
+    console.log("[initiate] Step 2: Public Key Conversion");
+    console.log("[initiate]   Seller pubkey:", sellerPubkey.toBase58());
+    console.log("[initiate]   Buyer pubkey:", buyerPubkey.toBase58());
+    console.log("[initiate]   Arbiter pubkey:", arbiterPubkey.toBase58());
+
+    const dealIdBytes = dealIdToBytes(dealId);
+    console.log("[initiate] Step 3: Deal ID to Bytes Conversion");
+    console.log("[initiate]   dealId string:", dealId);
+    console.log("[initiate]   dealIdBytes length:", dealIdBytes.length, "bytes");
+    console.log("[initiate]   dealIdBytes hex:", dealIdBytes.toString("hex"));
+    console.log("[initiate]   dealIdBytes (base64):", dealIdBytes.toString("base64"));
+
+    if (dealIdBytes.length !== 16) {
+      console.error("[initiate] ❌ ERROR: dealIdBytes length mismatch!");
+      console.error("[initiate]   Expected: 16 bytes");
+      console.error("[initiate]   Got:", dealIdBytes.length, "bytes");
+      throw new Error(`dealId bytes must be exactly 16 bytes, got ${dealIdBytes.length}`);
+    }
+    console.log("[initiate]   ✅ dealIdBytes is exactly 16 bytes");
+
+    const { publicKey: escrowPda, bump } = getEscrowPda({ dealId });
+    const pdaSeeds = [Buffer.from("escrow"), dealIdBytes];
+    console.log("[initiate] Step 4: PDA Derivation");
+    console.log("[initiate]   Program ID:", solanaConfig.programId.toBase58());
+    console.log("[initiate]   PDA Seeds:");
+    console.log("[initiate]     [0] 'escrow':", Buffer.from("escrow").toString("hex"), `(${Buffer.from("escrow").length} bytes)`);
+    console.log("[initiate]     [1] dealIdBytes:", dealIdBytes.toString("hex"), `(${dealIdBytes.length} bytes)`);
+    console.log("[initiate]   Derived Escrow PDA:", escrowPda.toBase58());
+    console.log("[initiate]   Bump:", bump);
+
     const [vaultAuthority, vaultBump] = PublicKey.findProgramAddressSync(
       [Buffer.from("vault"), escrowPda.toBuffer()],
       solanaConfig.programId
     );
-
     const vaultAta = deriveAta(solanaConfig.usdcMint, vaultAuthority, true);
+    console.log("[initiate]   Vault Authority PDA:", vaultAuthority.toBase58(), "(bump:", vaultBump + ")");
+    console.log("[initiate]   Vault ATA:", vaultAta.toBase58());
+
+    const escrowAccountInfo = await withRpcRetry(
+      async (conn) => conn.getAccountInfo(escrowPda),
+      { endpointManager: rpcManager }
+    );
+
+    console.log("[initiate] Step 5: Account Existence Check");
+    console.log("[initiate]   Escrow PDA:", escrowPda.toBase58());
+    console.log("[initiate]   Account exists:", !!escrowAccountInfo);
+
+    if (escrowAccountInfo) {
+      console.log("[initiate]   Account details:", {
+        owner: escrowAccountInfo.owner.toBase58(),
+        dataLength: escrowAccountInfo.data.length,
+        lamports: escrowAccountInfo.lamports,
+        executable: escrowAccountInfo.executable,
+      });
+
+      const existingDealByPda = await prisma.deal.findFirst({
+        where: {
+          onchainAddress: escrowPda.toBase58(),
+          sellerWallet: input.sellerWallet,
+          buyerWallet: input.buyerWallet,
+        },
+        select: { id: true, status: true },
+      });
+
+      if (existingDealByPda) {
+        if (existingDealByPda.status !== DealStatus.INIT) {
+          logAction({
+            reqId,
+            action: "actions.initiate",
+            dealId: existingDealByPda.id,
+            wallet: input.sellerWallet,
+            status: existingDealByPda.status,
+            message: "escrow_account_exists_not_init",
+          });
+          throw new Error(
+            `Escrow account exists and is in ${existingDealByPda.status} status. Use deal ID: ${existingDealByPda.id}`
+          );
+        }
+
+        logAction({
+          reqId,
+          action: "actions.initiate",
+          dealId: existingDealByPda.id,
+          wallet: input.sellerWallet,
+          status: existingDealByPda.status,
+          message: existingDealByPda.id !== dealId
+            ? "escrow_account_exists_different_deal_returning_existing"
+            : "escrow_account_already_initialized_continuing",
+          durationMs: Date.now() - startedAt,
+        });
+
+        let blockhash = "";
+        let lastValidBlockHeight = 0;
+        try {
+          const blockhashResult = await Promise.race([
+            withRpcRetry(
+              async (conn) => conn.getLatestBlockhash("confirmed"),
+              { endpointManager: rpcManager, timeoutMs: 3000, maxAttempts: 2 }
+            ),
+            new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), 3000))
+          ]) as { blockhash: string; lastValidBlockHeight: number };
+          blockhash = blockhashResult.blockhash;
+          lastValidBlockHeight = blockhashResult.lastValidBlockHeight;
+        } catch (err) {
+          console.warn(`[initiate] Failed to fetch blockhash: ${err}`);
+        }
+
+        return {
+          dealId: existingDealByPda.id,
+          txMessageBase64: "",
+          nextClientAction: "fund",
+          latestBlockhash: blockhash,
+          lastValidBlockHeight,
+          feePayer: derivePayer(sellerPubkey).toBase58(),
+        };
+      }
+
+      console.error("[initiate] ❌ ERROR: Account exists but no matching deal in database");
+      console.error("[initiate]   PDA:", escrowPda.toBase58());
+      console.error("[initiate]   Attempted dealId:", dealId);
+      throw new Error(
+        `Escrow account ${escrowPda.toBase58()} already exists on-chain. Cannot initialize with deal_id ${dealId}. ` +
+        `Account was created with a different deal_id. Use the original deal_id that created this account.`
+      );
+    }
+
+    console.log("[initiate]   ✅ Account does not exist - proceeding with initialization");
 
     const [sellerIdentity, buyerIdentity] = await Promise.all([
-      upsertWalletIdentity(input.sellerWallet, solanaConfig.cluster),
-      upsertWalletIdentity(input.buyerWallet, solanaConfig.cluster),
+      upsertWalletIdentity(input.sellerWallet, solanaConfig.cluster).catch(() =>
+        createUserIfMissing(input.sellerWallet)
+      ),
+      createUserIfMissing(input.buyerWallet),
     ]);
 
+    console.log("[initiate] Step 5.5: Database Deal ID Validation (Pre-Check)");
+    console.log("[initiate]   Fetching deal record from database using dealId:", dealId);
     const existingDeal = await fetchDealSummary(dealId);
-
-    if (existingDeal && existingDeal.status !== DealStatus.INIT) {
-      logAction({
-        reqId,
-        action: "actions.initiate",
-        dealId,
-        wallet: input.sellerWallet,
-        status: existingDeal.status,
-        message: "deal_already_initialized",
-      });
-      throw new Error("Deal already initialized");
+    
+    if (existingDeal) {
+      console.log("[initiate]   Database deal record found (pre-check):");
+      console.log("[initiate]     Database dealId:", existingDeal.id);
+      console.log("[initiate]     Request dealId:", dealId);
+      console.log("[initiate]     Database dealId matches request dealId:", existingDeal.id === dealId ? "✅ YES" : "❌ NO");
+      
+      if (existingDeal.id !== dealId) {
+        console.error("[initiate] ❌ CRITICAL ERROR: Database dealId mismatch (pre-check)!");
+        console.error("[initiate]   Database dealId:", existingDeal.id);
+        console.error("[initiate]   Request dealId:", dealId);
+        console.error("[initiate]   This mismatch will cause PDA derivation errors!");
+        throw new Error(
+          `Database dealId mismatch: expected ${existingDeal.id}, got ${dealId}. ` +
+          `The database dealId must match the request dealId used for PDA derivation and instruction data.`
+        );
+      }
+      console.log("[initiate]   ✅ Database dealId matches request dealId (pre-check)");
+      
+      if (existingDeal.status !== DealStatus.INIT) {
+        logAction({
+          reqId,
+          action: "actions.initiate",
+          dealId,
+          wallet: input.sellerWallet,
+          status: existingDeal.status,
+          message: "deal_already_initialized",
+        });
+        throw new Error("Deal already initialized");
+      }
+    } else {
+      console.log("[initiate]   Database deal record not found (new deal)");
     }
 
     const usdPriceSnapshot: Prisma.JsonObject = {
@@ -155,12 +311,19 @@ export class EscrowService {
       capturedAt: new Date().toISOString(),
     };
 
+    const sellerId = (typeof sellerIdentity === 'object' && 'userId' in sellerIdentity
+      ? sellerIdentity.userId
+      : sellerIdentity.id) as string;
+    const buyerId = (typeof buyerIdentity === 'object' && 'userId' in buyerIdentity
+      ? buyerIdentity.userId
+      : buyerIdentity.id) as string;
+
     if (!existingDeal) {
       await prisma.deal.create({
         data: {
           id: dealId,
-          sellerId: sellerIdentity.userId,
-          buyerId: buyerIdentity.userId,
+          sellerId,
+          buyerId,
           arbiterPubkey: input.arbiterWallet ?? input.sellerWallet,
           sellerWallet: input.sellerWallet,
           buyerWallet: input.buyerWallet,
@@ -173,15 +336,17 @@ export class EscrowService {
           usdPriceSnapshot,
           feeBps: input.feeBps,
           status: DealStatus.INIT,
-          title: input.title,
+          title: input.title?.trim() || null,
+          buyerEmail: input.buyerEmail?.trim() || null,
+          sellerEmail: input.sellerEmail?.trim() || null,
         },
       });
     } else {
       await prisma.deal.update({
         where: { id: dealId },
         data: {
-          sellerId: sellerIdentity.userId,
-          buyerId: buyerIdentity.userId,
+          sellerId,
+          buyerId,
           sellerWallet: input.sellerWallet,
           buyerWallet: input.buyerWallet,
           arbiterPubkey: input.arbiterWallet ?? existingDeal.arbiterPubkey,
@@ -193,22 +358,131 @@ export class EscrowService {
           disputeDeadline: new Date(disputeAt * 1000),
           usdPriceSnapshot,
           feeBps: input.feeBps,
-          title: input.title,
+          title: input.title?.trim() || null,
+          buyerEmail: input.buyerEmail?.trim() || null,
+          sellerEmail: input.sellerEmail?.trim() || null,
         },
       });
     }
 
+    console.log("[initiate] Step 5.6: Database Deal ID Validation (Post-Create/Update)");
+    console.log("[initiate]   Re-fetching deal record from database to verify consistency");
+    const dbDeal = await fetchDealSummary(dealId);
+    
+    if (!dbDeal) {
+      console.error("[initiate] ❌ CRITICAL ERROR: Deal record not found after create/update!");
+      throw new Error(`Deal record with id ${dealId} not found in database after create/update operation`);
+    }
+    
+    console.log("[initiate]   Database deal record found (post-check):");
+    console.log("[initiate]     Database dealId:", dbDeal.id);
+    console.log("[initiate]     Request dealId:", dealId);
+    console.log("[initiate]     Database dealId matches request dealId:", dbDeal.id === dealId ? "✅ YES" : "❌ NO");
+    
+    if (dbDeal.id !== dealId) {
+      console.error("[initiate] ❌ CRITICAL ERROR: Database dealId mismatch (post-check)!");
+      console.error("[initiate]   Database dealId:", dbDeal.id);
+      console.error("[initiate]   Request dealId:", dealId);
+      console.error("[initiate]   This mismatch will cause PDA derivation errors!");
+      throw new Error(
+        `Database dealId mismatch: expected ${dbDeal.id}, got ${dealId}. ` +
+        `The database dealId must match the request dealId used for PDA derivation and instruction data.`
+      );
+    }
+    console.log("[initiate]   ✅ Database dealId matches request dealId (post-check)");
+    
+    console.log("[initiate]   Database deal details:");
+    console.log("[initiate]     Status:", dbDeal.status);
+    console.log("[initiate]     Onchain Address:", dbDeal.onchainAddress);
+    console.log("[initiate]     Seller Wallet:", dbDeal.sellerWallet);
+    console.log("[initiate]     Buyer Wallet:", dbDeal.buyerWallet);
+    
+    if (dbDeal.onchainAddress && dbDeal.onchainAddress !== escrowPda.toBase58()) {
+      console.error("[initiate] ❌ CRITICAL ERROR: Database onchainAddress does not match derived PDA!");
+      console.error("[initiate]   Database onchainAddress:", dbDeal.onchainAddress);
+      console.error("[initiate]   Derived Escrow PDA:", escrowPda.toBase58());
+      throw new Error(
+        `Database onchainAddress mismatch: database has ${dbDeal.onchainAddress}, but derived PDA is ${escrowPda.toBase58()}. ` +
+        `This indicates the database dealId does not match the dealId used for PDA derivation.`
+      );
+    }
+    console.log("[initiate]   ✅ Database onchainAddress matches derived PDA");
+    console.log("[initiate]   ✅ All database validations passed - proceeding to instruction data construction");
+
+    const amountUnits = BigInt(parseAmountToUnits(input.amount));
+    console.log("[initiate] Step 6: Instruction Data Construction");
+    console.log("[initiate]   Amount (USD):", input.amount);
+    console.log("[initiate]   Amount (units):", amountUnits.toString());
+    console.log("[initiate]   Fee BPS:", input.feeBps);
+    console.log("[initiate]   Dispute At (unix):", disputeAt);
+
+    const discriminator = INITIATE_DISCRIMINATOR;
+    const amountBuffer = u64ToBuffer(amountUnits);
+    const feeBpsBuffer = u16ToBuffer(input.feeBps);
+    const disputeAtBuffer = i64ToBuffer(BigInt(disputeAt));
+
+    console.log("[initiate]   Instruction Data Components:");
+    console.log("[initiate]     [0-7]   Discriminator (8 bytes):", discriminator.toString("hex"));
+    console.log("[initiate]     [8-15]  Amount (8 bytes):", amountBuffer.toString("hex"), `(${amountBuffer.length} bytes)`);
+    console.log("[initiate]     [16-17] Fee BPS (2 bytes):", feeBpsBuffer.toString("hex"), `(${feeBpsBuffer.length} bytes)`);
+    console.log("[initiate]     [18-25] Dispute At (8 bytes):", disputeAtBuffer.toString("hex"), `(${disputeAtBuffer.length} bytes)`);
+    console.log("[initiate]     [26-41] Deal ID (16 bytes):", dealIdBytes.toString("hex"), `(${dealIdBytes.length} bytes)`);
+
     const data = Buffer.concat([
-      INITIATE_DISCRIMINATOR,
-      u64ToBuffer(BigInt(parseAmountToUnits(input.amount))), // amount in token units
-      u16ToBuffer(input.feeBps),
-      i64ToBuffer(BigInt(disputeAt)),
+      discriminator,
+      amountBuffer,
+      feeBpsBuffer,
+      disputeAtBuffer,
+      dealIdBytes,
     ]);
 
-    // Get arbiter pubkey
-    const arbiterPubkey = input.arbiterWallet ? new PublicKey(input.arbiterWallet) : sellerPubkey;
+    console.log("[initiate]   Complete Instruction Data:");
+    console.log("[initiate]     Total length:", data.length, "bytes");
+    console.log("[initiate]     Full hex:", data.toString("hex"));
 
-    // Vault authority PDA derivation moved up
+    if (data.length !== 42) {
+      console.error("[initiate] ❌ ERROR: Instruction data length mismatch!");
+      console.error("[initiate]   Expected: 42 bytes (discriminator:8 + amount:8 + fee_bps:2 + dispute_by:8 + deal_id:16)");
+      console.error("[initiate]   Got:", data.length, "bytes");
+      throw new Error(
+        `Instruction data must be exactly 42 bytes (discriminator:8 + amount:8 + fee_bps:2 + dispute_by:8 + deal_id:16), got ${data.length} bytes`
+      );
+    }
+    console.log("[initiate]   ✅ Instruction data is exactly 42 bytes");
+
+    const last16Bytes = data.slice(26, 42);
+    const dealIdBytesMatch = last16Bytes.equals(dealIdBytes);
+    console.log("[initiate]   Verification: Last 16 bytes of instruction data");
+    console.log("[initiate]     Last 16 bytes hex:", last16Bytes.toString("hex"));
+    console.log("[initiate]     Original dealIdBytes hex:", dealIdBytes.toString("hex"));
+    console.log("[initiate]     Match:", dealIdBytesMatch ? "✅ YES" : "❌ NO");
+    if (!dealIdBytesMatch) {
+      console.error("[initiate] ❌ CRITICAL ERROR: Last 16 bytes of instruction data do not match dealIdBytes!");
+      throw new Error("Last 16 bytes of instruction data must match dealIdBytes");
+    }
+
+    console.log("[initiate] Step 7: PDA Consistency Verification");
+    const [verifiedPda, verifiedBump] = PublicKey.findProgramAddressSync(
+      [Buffer.from("escrow"), dealIdBytes],
+      solanaConfig.programId
+    );
+    console.log("[initiate]   Re-derived PDA using same dealIdBytes:");
+    console.log("[initiate]     Verified PDA:", verifiedPda.toBase58());
+    console.log("[initiate]     Verified Bump:", verifiedBump);
+    console.log("[initiate]     Original PDA:", escrowPda.toBase58());
+    console.log("[initiate]     Original Bump:", bump);
+    console.log("[initiate]     PDAs match:", escrowPda.toBase58() === verifiedPda.toBase58() ? "✅ YES" : "❌ NO");
+    console.log("[initiate]     Bumps match:", bump === verifiedBump ? "✅ YES" : "❌ NO");
+
+    if (escrowPda.toBase58() !== verifiedPda.toBase58()) {
+      console.error("[initiate] ❌ CRITICAL ERROR: PDA consistency check failed!");
+      console.error("[initiate]   Derived PDA:", escrowPda.toBase58());
+      console.error("[initiate]   Verified PDA:", verifiedPda.toBase58());
+      throw new Error(
+        `PDA consistency check failed: derived ${escrowPda.toBase58()}, verified ${verifiedPda.toBase58()}`
+      );
+    }
+    console.log("[initiate]   ✅ PDA consistency verified");
 
     const instruction = new TransactionInstruction({
       programId: solanaConfig.programId,
@@ -229,15 +503,34 @@ export class EscrowService {
       data,
     });
 
-    console.log("Initiate Transaction Keys:");
-    console.log("Seller:", sellerPubkey.toBase58());
-    console.log("Buyer:", buyerPubkey.toBase58());
-    console.log("Arbiter:", arbiterPubkey.toBase58());
-    console.log("Mint:", solanaConfig.usdcMint.toBase58());
-    console.log("Escrow PDA:", escrowPda.toBase58());
+    console.log("[initiate] Step 8: Transaction Instruction Accounts");
+    console.log("[initiate]   Program ID:", solanaConfig.programId.toBase58());
+    console.log("[initiate]   Accounts (in order):");
+    console.log("[initiate]     [0]  Payer/Seller (signer, writable):", sellerPubkey.toBase58());
+    console.log("[initiate]     [1]  Seller (not signer, not writable):", sellerPubkey.toBase58());
+    console.log("[initiate]     [2]  Buyer (not signer, not writable):", buyerPubkey.toBase58());
+    console.log("[initiate]     [3]  Arbiter (not signer, not writable):", arbiterPubkey.toBase58());
+    console.log("[initiate]     [4]  Mint (not signer, not writable):", solanaConfig.usdcMint.toBase58());
+    console.log("[initiate]     [5]  Escrow PDA (not signer, writable):", escrowPda.toBase58());
+    console.log("[initiate]     [6]  Vault Authority (not signer, not writable):", vaultAuthority.toBase58());
+    console.log("[initiate]     [7]  Vault ATA (not signer, writable):", vaultAta.toBase58());
+    console.log("[initiate]     [8]  System Program (not signer, not writable):", SystemProgram.programId.toBase58());
+    console.log("[initiate]     [9]  Token Program (not signer, not writable):", TOKEN_PROGRAM_ID.toBase58());
+    console.log("[initiate]     [10] Associated Token Program (not signer, not writable):", ASSOCIATED_TOKEN_PROGRAM_ID.toBase58());
+    console.log("[initiate]     [11] Rent Sysvar (not signer, not writable):", SYSVAR_RENT_PUBKEY.toBase58());
 
     const payerKey = derivePayer(sellerPubkey);
+    console.log("[initiate] Step 9: Transaction Building");
+    console.log("[initiate]   Fee Payer:", payerKey.toBase58());
+    console.log("[initiate]   Instruction data length:", data.length, "bytes");
+    console.log("[initiate]   Instruction data hex:", data.toString("hex"));
+
     const txResult = await buildVersionedTransaction([instruction], payerKey);
+
+    console.log("[initiate] Step 10: Transaction Result");
+    console.log("[initiate]   Latest Blockhash:", txResult.latestBlockhash);
+    console.log("[initiate]   Last Valid Block Height:", txResult.lastValidBlockHeight);
+    console.log("[initiate]   Transaction Message (base64 length):", txResult.txMessageBase64.length, "chars");
 
     logAction({
       reqId,
@@ -246,6 +539,13 @@ export class EscrowService {
       wallet: input.sellerWallet,
       durationMs: Date.now() - startedAt,
       status: "INIT",
+    });
+
+    console.log("[initiate] ===== END INITIATE FLOW =====");
+    console.log("[initiate] Final Result:", {
+      dealId,
+      escrowPda: escrowPda.toBase58(),
+      nextClientAction: "fund",
     });
 
     return {
@@ -283,11 +583,40 @@ export class EscrowService {
 
     const buyerPubkey = new PublicKey(input.buyerWallet);
     const amountUnits = parseAmountToUnits(input.amount);
-    const { publicKey: escrowPda } = getEscrowPda({
-      seller: deal.sellerWallet,
-      buyer: deal.buyerWallet,
-      mint: deal.depositTokenMint,
+    
+    // CRITICAL: Use deal.id from database, not input.dealId
+    // The database has the actual dealId used during initiate, which may differ from frontend input
+    const actualDealId = deal.id;
+    const { publicKey: escrowPda, bump } = getEscrowPda({
+      dealId: actualDealId,
     });
+    
+    // Debug PDA derivation for fund
+    console.log("=== Fund PDA Debug ===");
+    console.log("Input Deal ID:", input.dealId);
+    console.log("Actual Deal ID (from DB):", actualDealId);
+    console.log("Program ID:", solanaConfig.programId.toBase58());
+    console.log("Derived Escrow PDA:", escrowPda.toBase58());
+    console.log("Bump:", bump);
+    
+    // Verify PDA matches expected
+    const dealIdBytes = dealIdToBytes(actualDealId);
+    const expectedSeeds = [
+      Buffer.from("escrow"),
+      dealIdBytes,
+    ];
+    const [verifiedPda, verifiedBump] = PublicKey.findProgramAddressSync(
+      expectedSeeds,
+      solanaConfig.programId
+    );
+    if (escrowPda.toBase58() !== verifiedPda.toBase58()) {
+      console.error("❌ PDA MISMATCH in fund!");
+      console.error("  Derived:", escrowPda.toBase58());
+      console.error("  Expected:", verifiedPda.toBase58());
+      throw new Error(`PDA derivation mismatch in fund: expected ${verifiedPda.toBase58()}, got ${escrowPda.toBase58()}`);
+    }
+    console.log("✅ PDA verified:", escrowPda.toBase58());
+    console.log("======================");
     const payerKey = derivePayer(buyerPubkey);
 
     const buyerAtaInfo = buildIdempotentCreateAtaIx(payerKey, buyerPubkey, solanaConfig.usdcMint);
@@ -302,12 +631,44 @@ export class EscrowService {
       solanaConfig.usdcDecimals
     );
 
-    const data = Buffer.concat([FUND_DISCRIMINATOR, u64ToBuffer(amountUnits)]);
+    // Include deal_id in instruction data for PDA verification
+    // Note: fund() only takes deal_id, not amount (amount is already in escrow_state from initiate)
+    // CRITICAL: Use actualDealId (from DB) to match what was used during initiate
+    // dealIdBytes is already declared above for PDA verification, reuse it here
+    
+    // CRITICAL: Verify deal_id bytes match what was used for PDA derivation
+    console.log("=== Fund Instruction Data Debug ===");
+    console.log("Input Deal ID:", input.dealId);
+    console.log("Actual Deal ID (from DB):", actualDealId);
+    console.log("Deal ID bytes (hex):", dealIdBytes.toString("hex"));
+    console.log("Deal ID bytes length:", dealIdBytes.length);
+    console.log("Escrow PDA (derived with this deal_id):", escrowPda.toBase58());
+    console.log("===================================");
+    
+    const data = Buffer.concat([
+      FUND_DISCRIMINATOR,
+      dealIdBytes, // deal_id (16 bytes) - only parameter for fund()
+    ]);
+    
+    // Verify instruction data format
+    console.log("Fund instruction data length:", data.length);
+    console.log("  Discriminator (8 bytes):", data.slice(0, 8).toString("hex"));
+    console.log("  Deal ID (16 bytes):", data.slice(8, 24).toString("hex"));
+    
+    // CRITICAL: Fund instruction must match on-chain Fund struct account order:
+    // 1. buyer (signer, writable)
+    // 2. escrow_state (PDA, writable)
+    // 3. buyer_ata (writable)
+    // 4. vault_ata (writable)
+    // 5. token_program (not writable)
     const programIx = new TransactionInstruction({
       programId: solanaConfig.programId,
       keys: [
         { pubkey: buyerPubkey, isSigner: true, isWritable: true },
         { pubkey: escrowPda, isSigner: false, isWritable: true },
+        { pubkey: buyerAtaInfo.ata, isSigner: false, isWritable: true },
+        { pubkey: vaultAtaInfo.ata, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
       ],
       data,
     });
@@ -347,6 +708,8 @@ export class EscrowService {
       throw new Error(`Deal status ${deal.status} cannot be released`);
     }
 
+    // CRITICAL: Release requires seller as signer (on-chain constraint: escrow_state.seller == seller.key())
+    // But schema has buyerWallet, so we validate against buyerWallet but use seller from deal
     if (deal.buyerWallet !== input.buyerWallet) {
       throw new Error("Caller wallet does not match buyer");
     }
@@ -359,31 +722,61 @@ export class EscrowService {
       throw new Error("Deal is missing deposit token mint");
     }
 
-    const buyerPubkey = new PublicKey(input.buyerWallet);
+    // On-chain Release struct expects seller as signer
+    const sellerPubkey = new PublicKey(deal.sellerWallet);
+    
+    // CRITICAL: Use deal.id from database, not input.dealId
+    const actualDealId = deal.id;
     const { publicKey: escrowPda } = getEscrowPda({
-      seller: deal.sellerWallet,
-      buyer: deal.buyerWallet,
-      mint: deal.depositTokenMint,
+      dealId: actualDealId,
     });
 
-    const data = Buffer.from(RELEASE_DISCRIMINATOR);
+    // Derive vault authority PDA (seeds: ["vault", escrow_state.key(), bump])
+    // Note: We need the escrow_state.bump, but we can derive the canonical vault authority
+    const [vaultAuthority] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vault"), escrowPda.toBuffer()],
+      solanaConfig.programId
+    );
+
+    // Derive ATAs
+    const vaultAta = deriveAta(solanaConfig.usdcMint, vaultAuthority, true);
+    const sellerAta = deriveAta(solanaConfig.usdcMint, sellerPubkey);
+
+    // Include deal_id in instruction data for PDA verification
+    const dealIdBytes = dealIdToBytes(actualDealId);
+    const data = Buffer.concat([
+      RELEASE_DISCRIMINATOR,
+      dealIdBytes, // deal_id (16 bytes)
+    ]);
+    
+    // CRITICAL: Release instruction must match on-chain Release struct account order:
+    // 1. seller (signer, writable)
+    // 2. escrow_state (PDA, writable)
+    // 3. vault_authority (PDA, not writable)
+    // 4. vault_ata (writable)
+    // 5. seller_ata (writable)
+    // 6. token_program (not writable)
     const programIx = new TransactionInstruction({
       programId: solanaConfig.programId,
       keys: [
-        { pubkey: buyerPubkey, isSigner: true, isWritable: true },
+        { pubkey: sellerPubkey, isSigner: true, isWritable: true },
         { pubkey: escrowPda, isSigner: false, isWritable: true },
+        { pubkey: vaultAuthority, isSigner: false, isWritable: false },
+        { pubkey: vaultAta, isSigner: false, isWritable: true },
+        { pubkey: sellerAta, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
       ],
       data,
     });
 
-    const payerKey = derivePayer(buyerPubkey);
+    const payerKey = derivePayer(sellerPubkey);
     const txResult = await buildVersionedTransaction([programIx], payerKey);
 
     logAction({
       reqId,
       action: "actions.release",
       dealId: deal.id,
-      wallet: input.buyerWallet,
+      wallet: deal.sellerWallet,
       durationMs: Date.now() - startedAt,
       status: deal.status,
     });
@@ -409,6 +802,8 @@ export class EscrowService {
       throw new Error(`Deal status ${deal.status} cannot be refunded`);
     }
 
+    // CRITICAL: Refund requires buyer as signer (on-chain constraint: escrow_state.buyer == buyer.key())
+    // But schema has sellerWallet, so we validate against sellerWallet but use buyer from deal
     if (deal.sellerWallet !== input.sellerWallet) {
       throw new Error("Caller wallet does not match seller");
     }
@@ -421,31 +816,60 @@ export class EscrowService {
       throw new Error("Deal is missing deposit token mint");
     }
 
-    const sellerPubkey = new PublicKey(input.sellerWallet);
+    // On-chain Refund struct expects buyer as signer
+    const buyerPubkey = new PublicKey(deal.buyerWallet);
+    
+    // CRITICAL: Use deal.id from database, not input.dealId
+    const actualDealId = deal.id;
     const { publicKey: escrowPda } = getEscrowPda({
-      seller: deal.sellerWallet,
-      buyer: deal.buyerWallet,
-      mint: deal.depositTokenMint,
+      dealId: actualDealId,
     });
 
-    const data = Buffer.from(REFUND_DISCRIMINATOR);
+    // Derive vault authority PDA (seeds: ["vault", escrow_state.key(), bump])
+    const [vaultAuthority] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vault"), escrowPda.toBuffer()],
+      solanaConfig.programId
+    );
+
+    // Derive ATAs
+    const vaultAta = deriveAta(solanaConfig.usdcMint, vaultAuthority, true);
+    const buyerAta = deriveAta(solanaConfig.usdcMint, buyerPubkey);
+
+    // Include deal_id in instruction data for PDA verification
+    const dealIdBytes = dealIdToBytes(actualDealId);
+    const data = Buffer.concat([
+      REFUND_DISCRIMINATOR,
+      dealIdBytes, // deal_id (16 bytes)
+    ]);
+    
+    // CRITICAL: Refund instruction must match on-chain Refund struct account order:
+    // 1. buyer (signer, writable)
+    // 2. escrow_state (PDA, writable)
+    // 3. vault_authority (PDA, not writable)
+    // 4. vault_ata (writable)
+    // 5. buyer_ata (writable)
+    // 6. token_program (not writable)
     const programIx = new TransactionInstruction({
       programId: solanaConfig.programId,
       keys: [
-        { pubkey: sellerPubkey, isSigner: true, isWritable: true },
+        { pubkey: buyerPubkey, isSigner: true, isWritable: true },
         { pubkey: escrowPda, isSigner: false, isWritable: true },
+        { pubkey: vaultAuthority, isSigner: false, isWritable: false },
+        { pubkey: vaultAta, isSigner: false, isWritable: true },
+        { pubkey: buyerAta, isSigner: false, isWritable: true },
+        { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
       ],
       data,
     });
 
-    const payerKey = derivePayer(sellerPubkey);
+    const payerKey = derivePayer(buyerPubkey);
     const txResult = await buildVersionedTransaction([programIx], payerKey);
 
     logAction({
       reqId,
       action: "actions.refund",
       dealId: deal.id,
-      wallet: input.sellerWallet,
+      wallet: deal.buyerWallet,
       durationMs: Date.now() - startedAt,
       status: deal.status,
     });

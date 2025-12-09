@@ -17,6 +17,8 @@ export const InitiateActionSchema = z.object({
   disputeDeadline: z.number().int().optional(),
   description: z.string().max(512).optional(),
   title: z.string().max(100).optional(),
+  buyerEmail: z.string().email().optional().or(z.literal("")),
+  sellerEmail: z.string().email().optional().or(z.literal("")),
   clientDealId: z.string().uuid().optional(),
   payer: WalletSchema,
 });
