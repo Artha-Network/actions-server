@@ -339,4 +339,222 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// ============================================================
+// Arbitration endpoints (Sprint 4.5)
+// ============================================================
+
+// POST /api/deals/:id/arbitrate - Trigger AI arbitration
+router.post('/:id/arbitrate', async (req, res) => {
+  try {
+    const { id: dealId } = req.params;
+
+    // 1. Fetch deal from database (with buyer, seller relations)
+    const deal = await prisma.deal.findUnique({
+      where: { id: dealId },
+      include: {
+        buyer: true,
+        seller: true,
+      }
+    });
+
+    if (!deal) {
+      return res.status(404).json({ error: 'Deal not found' });
+    }
+
+    // 2. Validate deal status is DISPUTED
+    if (deal.status !== 'DISPUTED') {
+      return res.status(400).json({
+        error: `Cannot trigger arbitration: deal is in ${deal.status} status (must be DISPUTED)`
+      });
+    }
+
+    // Check if ticket already exists (idempotent)
+    const existingTicket = await prisma.resolveTicket.findFirst({
+      where: { dealId },
+      orderBy: { issuedAt: 'desc' }
+    });
+
+    if (existingTicket) {
+      // Return existing ticket
+      return res.json({
+        ticket: {
+          schema: 'https://artha.network/schemas/resolve-ticket-v1.json',
+          deal_id: dealId,
+          outcome: existingTicket.finalAction,
+          reason_short: 'Previously generated verdict',
+          rationale_cid: existingTicket.rationaleCid,
+          violated_rules: [],
+          confidence: Number(existingTicket.confidence),
+          nonce: '0',
+          expires_at_utc: existingTicket.expiresAt?.toISOString() || new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+        },
+        arbiter_pubkey: existingTicket.arbiterPubkey,
+        ed25519_signature: existingTicket.signature
+      });
+    }
+
+    // 3. Fetch all evidence for the deal
+    const evidenceList = await prisma.evidence.findMany({
+      where: { dealId },
+      include: {
+        submittedBy: {
+          select: {
+            walletAddress: true
+          }
+        }
+      },
+      orderBy: { submittedAt: 'asc' }
+    });
+
+    // 4. Validate at least one evidence exists
+    if (evidenceList.length === 0) {
+      return res.status(400).json({ error: 'No evidence found for arbitration' });
+    }
+
+    // 5. Format request payload matching arbiter service schema
+    const arbitrationRequest = {
+      deal: {
+        deal_id: dealId,
+        seller: deal.sellerWallet || deal.seller.walletAddress || '',
+        buyer: deal.buyerWallet || deal.buyer.walletAddress || '',
+        amount: Number(deal.priceUsd),
+        mint: deal.depositTokenMint,
+        dispute_by: Math.floor(deal.disputeDeadline.getTime() / 1000), // Unix timestamp
+        fee_bps: deal.feeBps,
+        created_at: Math.floor(deal.createdAt.getTime() / 1000), // Unix timestamp
+        status: 'Disputed'
+      },
+      evidence: evidenceList.map(e => {
+        const submittedBy = e.submittedBy.walletAddress === deal.buyerWallet ? 'buyer' : 'seller';
+
+        // Determine evidence type based on MIME type
+        let evidenceType: 'text' | 'pdf' | 'image' | 'json' = 'text';
+        if (e.mimeType.includes('pdf')) {
+          evidenceType = 'pdf';
+        } else if (e.mimeType.includes('image')) {
+          evidenceType = 'image';
+        } else if (e.mimeType.includes('json')) {
+          evidenceType = 'json';
+        }
+
+        return {
+          cid: e.cid,
+          type: evidenceType,
+          description: e.cid, // For text evidence, cid contains the text
+          submitted_by: submittedBy,
+          submitted_at: Math.floor(e.submittedAt.getTime() / 1000), // Unix timestamp
+          extracted_text: evidenceType === 'text' ? e.cid : undefined
+        };
+      }),
+      seller_claim: 'I fulfilled my obligations as agreed', // Default claim
+      buyer_claim: 'The terms were not met as specified' // Default claim
+    };
+
+    // 6. Call arbiter service
+    const ARBITER_SERVICE_URL = process.env.ARBITER_SERVICE_URL || 'http://localhost:3001';
+
+    let arbiterResponse;
+    try {
+      const response = await fetch(`${ARBITER_SERVICE_URL}/arbitrate`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(arbitrationRequest)
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Arbiter service returned ${response.status}: ${errorText}`);
+      }
+
+      arbiterResponse = await response.json();
+    } catch (error: any) {
+      console.error('Failed to call arbiter service:', error);
+      return res.status(500).json({
+        error: 'Failed to call arbiter service',
+        details: error.message
+      });
+    }
+
+    // 7. Parse response: SignedResolveTicket
+    const { ticket, arbiter_pubkey, ed25519_signature } = arbiterResponse;
+
+    // 8. Store in database
+    const resolveTicket = await prisma.resolveTicket.create({
+      data: {
+        dealId: deal.id,
+        finalAction: ticket.outcome, // 'RELEASE' or 'REFUND'
+        sellerBps: null, // SPLIT not implemented yet
+        confidence: ticket.confidence,
+        rationaleCid: ticket.rationale_cid,
+        arbiterPubkey: arbiter_pubkey,
+        signature: ed25519_signature,
+        source: 'AI',
+        expiresAt: new Date(ticket.expires_at_utc)
+      }
+    });
+
+    // 9. Update deal status to RESOLVED
+    await prisma.deal.update({
+      where: { id: dealId },
+      data: { status: 'RESOLVED' }
+    });
+
+    // 10. Return the ticket to client
+    res.json({
+      ticket,
+      arbiter_pubkey,
+      ed25519_signature
+    });
+  } catch (error) {
+    console.error('Failed to trigger arbitration:', error);
+    res.status(500).json({ error: 'Failed to trigger arbitration' });
+  }
+});
+
+// GET /api/deals/:id/resolution - Fetch stored verdict
+router.get('/:id/resolution', async (req, res) => {
+  try {
+    const { id: dealId } = req.params;
+
+    // Verify deal exists
+    const deal = await prisma.deal.findUnique({
+      where: { id: dealId },
+      select: { id: true }
+    });
+
+    if (!deal) {
+      return res.status(404).json({ error: 'Deal not found' });
+    }
+
+    // Fetch the most recent ResolveTicket for the deal
+    const resolveTicket = await prisma.resolveTicket.findFirst({
+      where: { dealId },
+      orderBy: { issuedAt: 'desc' }
+    });
+
+    if (!resolveTicket) {
+      return res.status(404).json({ error: 'No resolution found for this deal' });
+    }
+
+    // Return formatted response
+    res.json({
+      deal_id: dealId,
+      outcome: resolveTicket.finalAction,
+      confidence: Number(resolveTicket.confidence),
+      reason_short: 'AI arbitration verdict',
+      rationale_cid: resolveTicket.rationaleCid,
+      violated_rules: [],
+      arbiter_pubkey: resolveTicket.arbiterPubkey,
+      signature: resolveTicket.signature,
+      issued_at: resolveTicket.issuedAt.toISOString(),
+      expires_at: resolveTicket.expiresAt?.toISOString() || null
+    });
+  } catch (error) {
+    console.error('Failed to fetch resolution:', error);
+    res.status(500).json({ error: 'Failed to fetch resolution' });
+  }
+});
+
 export default router;
