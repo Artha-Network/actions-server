@@ -4,6 +4,7 @@ import {
   FundActionSchema,
   ReleaseActionSchema,
   RefundActionSchema,
+  OpenDisputeActionSchema,
   ConfirmActionSchema,
 } from "../types/actions";
 import { escrowService } from "../services/escrow-service";
@@ -61,6 +62,19 @@ router.post("/refund", async (req, res) => {
   }
   try {
     const result = await escrowService.refund(parsed.data, { reqId: getReqId(req) });
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(400).json({ error: toErrorMessage(error) });
+  }
+});
+
+router.post("/open-dispute", async (req, res) => {
+  const parsed = OpenDisputeActionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.message });
+  }
+  try {
+    const result = await escrowService.openDispute(parsed.data, { reqId: getReqId(req) });
     return res.status(200).json(result);
   } catch (error) {
     return res.status(400).json({ error: toErrorMessage(error) });
