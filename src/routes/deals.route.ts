@@ -173,6 +173,144 @@ router.get('/events/recent', async (req, res) => {
   }
 });
 
+// ============================================================
+// Evidence endpoints (Sprint 4)
+// ============================================================
+
+// POST /api/deals/:id/evidence - Submit evidence for a disputed deal
+router.post('/:id/evidence', async (req, res) => {
+  try {
+    const { id: dealId } = req.params;
+    const { description, type, wallet_address } = req.body;
+
+    // Validate required fields
+    if (!description || typeof description !== 'string') {
+      return res.status(400).json({ error: 'description is required' });
+    }
+    if (!wallet_address || typeof wallet_address !== 'string') {
+      return res.status(400).json({ error: 'wallet_address is required' });
+    }
+
+    // Find the deal
+    const deal = await prisma.deal.findUnique({
+      where: { id: dealId },
+    });
+
+    if (!deal) {
+      return res.status(404).json({ error: 'Deal not found' });
+    }
+
+    // Verify deal is in DISPUTED status
+    if (deal.status !== 'DISPUTED') {
+      return res.status(400).json({
+        error: `Cannot submit evidence: deal is in ${deal.status} status (must be DISPUTED)`
+      });
+    }
+
+    // Verify caller is buyer or seller of this deal
+    const isBuyer = deal.buyerWallet === wallet_address;
+    const isSeller = deal.sellerWallet === wallet_address;
+    if (!isBuyer && !isSeller) {
+      return res.status(403).json({ error: 'Only the buyer or seller of this deal can submit evidence' });
+    }
+
+    // Find the user by wallet
+    const user = await prisma.user.findUnique({
+      where: { walletAddress: wallet_address },
+      select: { id: true },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found. Please set up your profile first.' });
+    }
+
+    // Store description as CID placeholder (text evidence stored directly)
+    // In future sprints, file evidence will use Arweave/IPFS and store actual CIDs
+    const mimeType = type || 'text/plain';
+
+    const evidence = await prisma.evidence.create({
+      data: {
+        dealId,
+        submittedById: user.id,
+        cid: description, // For text evidence, store the text directly as CID placeholder
+        mimeType,
+      },
+      include: {
+        submittedBy: {
+          select: {
+            walletAddress: true,
+            displayName: true,
+          }
+        }
+      }
+    });
+
+    res.status(201).json({
+      id: evidence.id,
+      deal_id: evidence.dealId,
+      description: evidence.cid,
+      mime_type: evidence.mimeType,
+      submitted_by: evidence.submittedBy.walletAddress,
+      submitted_by_name: evidence.submittedBy.displayName,
+      submitted_at: evidence.submittedAt.toISOString(),
+      role: isBuyer ? 'buyer' : 'seller',
+    });
+  } catch (error) {
+    console.error('Failed to submit evidence:', error);
+    res.status(500).json({ error: 'Failed to submit evidence' });
+  }
+});
+
+// GET /api/deals/:id/evidence - List all evidence for a deal
+router.get('/:id/evidence', async (req, res) => {
+  try {
+    const { id: dealId } = req.params;
+
+    // Verify deal exists
+    const deal = await prisma.deal.findUnique({
+      where: { id: dealId },
+      select: { id: true, buyerWallet: true, sellerWallet: true },
+    });
+
+    if (!deal) {
+      return res.status(404).json({ error: 'Deal not found' });
+    }
+
+    const evidenceList = await prisma.evidence.findMany({
+      where: { dealId },
+      include: {
+        submittedBy: {
+          select: {
+            walletAddress: true,
+            displayName: true,
+          }
+        }
+      },
+      orderBy: { submittedAt: 'asc' },
+    });
+
+    const mapped = evidenceList.map(e => ({
+      id: e.id,
+      deal_id: e.dealId,
+      description: e.cid,
+      mime_type: e.mimeType,
+      submitted_by: e.submittedBy.walletAddress,
+      submitted_by_name: e.submittedBy.displayName,
+      submitted_at: e.submittedAt.toISOString(),
+      role: e.submittedBy.walletAddress === deal.buyerWallet ? 'buyer' : 'seller',
+    }));
+
+    res.json({ evidence: mapped, total: mapped.length });
+  } catch (error) {
+    console.error('Failed to fetch evidence:', error);
+    res.status(500).json({ error: 'Failed to fetch evidence' });
+  }
+});
+
+// ============================================================
+// Deal deletion
+// ============================================================
+
 // DELETE /api/deals/:id - Delete a deal (only if INIT)
 router.delete('/:id', async (req, res) => {
   try {

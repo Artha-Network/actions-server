@@ -19,7 +19,7 @@ const app = express();
 
 // CORS configuration - allow all localhost ports for development
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://localhost:8081', 'http://localhost:8082', 'http://localhost:5173'], // Added Vite default
+  origin: ['http://localhost:3000', 'http://localhost:8080', 'http://localhost:8081', 'http://localhost:8082', 'http://localhost:5173'],
   credentials: true
 }));
 app.use(bodyParser.json());
