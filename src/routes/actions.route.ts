@@ -5,6 +5,7 @@ import {
   ReleaseActionSchema,
   RefundActionSchema,
   OpenDisputeActionSchema,
+  ResolveActionSchema,
   ConfirmActionSchema,
 } from "../types/actions";
 import { escrowService } from "../services/escrow-service";
@@ -75,6 +76,19 @@ router.post("/open-dispute", async (req, res) => {
   }
   try {
     const result = await escrowService.openDispute(parsed.data, { reqId: getReqId(req) });
+    return res.status(200).json(result);
+  } catch (error) {
+    return res.status(400).json({ error: toErrorMessage(error) });
+  }
+});
+
+router.post("/resolve", async (req, res) => {
+  const parsed = ResolveActionSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.message });
+  }
+  try {
+    const result = await escrowService.resolve(parsed.data, { reqId: getReqId(req) });
     return res.status(200).json(result);
   } catch (error) {
     return res.status(400).json({ error: toErrorMessage(error) });

@@ -54,13 +54,20 @@ export const OpenDisputeActionSchema = z.object({
 
 export type OpenDisputeActionInput = z.infer<typeof OpenDisputeActionSchema>;
 
+export const ResolveActionSchema = z.object({
+  dealId: z.string().uuid(),
+  arbiterWallet: WalletSchema,
+});
+
+export type ResolveActionInput = z.infer<typeof ResolveActionSchema>;
+
 export const ConfirmActionSchema = z.object({
   dealId: z.string().uuid(),
   txSig: z.string().refine((v) => typeof v === "string" && v.length >= 32 && v.length <= 128, {
     message: "Invalid transaction signature",
   }),
   actorWallet: WalletSchema,
-  action: z.enum(["INITIATE", "FUND", "RELEASE", "REFUND", "OPEN_DISPUTE"]),
+  action: z.enum(["INITIATE", "FUND", "RELEASE", "REFUND", "OPEN_DISPUTE", "RESOLVE"]),
 });
 
 export type ConfirmActionInput = z.infer<typeof ConfirmActionSchema>;

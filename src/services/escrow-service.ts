@@ -8,6 +8,7 @@ import {
   ReleaseActionInput,
   RefundActionInput,
   OpenDisputeActionInput,
+  ResolveActionInput,
   ConfirmActionInput,
   ActionResponse,
 } from "../types/actions";
@@ -52,6 +53,10 @@ const FUND_DISCRIMINATOR = getInstructionDiscriminator("fund");
 const RELEASE_DISCRIMINATOR = getInstructionDiscriminator("release");
 const REFUND_DISCRIMINATOR = getInstructionDiscriminator("refund");
 const OPEN_DISPUTE_DISCRIMINATOR = getInstructionDiscriminator("open_dispute");
+const RESOLVE_DISCRIMINATOR = getInstructionDiscriminator("resolve");
+
+const VERDICT_RELEASE = 1;
+const VERDICT_REFUND = 2;
 
 function resolveReqId(options?: ServiceOptions) {
   return options?.reqId ?? randomUUID();
@@ -951,6 +956,87 @@ export class EscrowService {
     };
   }
 
+  async resolve(input: ResolveActionInput, options?: ServiceOptions): Promise<ActionResponse> {
+    const reqId = resolveReqId(options);
+    const startedAt = Date.now();
+
+    const deal = await fetchDealSummary(input.dealId);
+    if (!deal) throw new Error("Deal not found");
+
+    if (deal.status !== DealStatus.RESOLVED) {
+      throw new Error(`Deal must be RESOLVED to execute resolution, current status: ${deal.status}`);
+    }
+
+    // Fetch the resolve ticket from the database
+    const ticket = await prisma.resolveTicket.findFirst({
+      where: { dealId: input.dealId },
+      orderBy: { issuedAt: "desc" },
+    });
+
+    if (!ticket) {
+      throw new Error("No resolution ticket found for this deal");
+    }
+
+    // Validate arbiter wallet matches
+    if (ticket.arbiterPubkey !== input.arbiterWallet) {
+      throw new Error("Arbiter wallet does not match the ticket");
+    }
+
+    // Map TicketAction to verdict value
+    let verdict: number;
+    if (ticket.finalAction === "RELEASE") {
+      verdict = VERDICT_RELEASE;
+    } else if (ticket.finalAction === "REFUND") {
+      verdict = VERDICT_REFUND;
+    } else {
+      throw new Error(`Unsupported ticket action: ${ticket.finalAction}. SPLIT is not supported in current on-chain program.`);
+    }
+
+    const arbiterPubkey = new PublicKey(input.arbiterWallet);
+
+    // Get escrow PDA
+    const actualDealId = deal.id;
+    const { publicKey: escrowPda } = getEscrowPda({
+      dealId: actualDealId,
+    });
+
+    // Resolve instruction: discriminator + verdict (u8)
+    const data = Buffer.concat([RESOLVE_DISCRIMINATOR, Buffer.from([verdict])]);
+
+    // Resolve struct account order (from on-chain):
+    // 1. arbiter (signer, not writable)
+    // 2. escrow_state (PDA, writable)
+    const programIx = new TransactionInstruction({
+      programId: solanaConfig.programId,
+      keys: [
+        { pubkey: arbiterPubkey, isSigner: true, isWritable: false },
+        { pubkey: escrowPda, isSigner: false, isWritable: true },
+      ],
+      data,
+    });
+
+    const payerKey = derivePayer(arbiterPubkey);
+    const txResult = await buildVersionedTransaction([programIx], payerKey);
+
+    logAction({
+      reqId,
+      action: "actions.resolve",
+      dealId: deal.id,
+      wallet: input.arbiterWallet,
+      durationMs: Date.now() - startedAt,
+      status: deal.status,
+    });
+
+    return {
+      dealId: deal.id,
+      txMessageBase64: txResult.txMessageBase64,
+      nextClientAction: "confirm",
+      latestBlockhash: txResult.latestBlockhash,
+      lastValidBlockHeight: txResult.lastValidBlockHeight,
+      feePayer: payerKey.toBase58(),
+    };
+  }
+
   async confirm(input: ConfirmActionInput, options?: ServiceOptions) {
     const reqId = resolveReqId(options);
     const startedAt = Date.now();
@@ -984,6 +1070,9 @@ export class EscrowService {
           throw new Error("Actor wallet must be buyer or seller");
         }
         expectedWallet = input.actorWallet;
+      } else if (input.action === "RESOLVE") {
+        // For resolve, actor must be the arbiter
+        expectedWallet = deal.arbiterPubkey;
       } else {
         expectedWallet = deal.sellerWallet;
       }
@@ -1007,6 +1096,25 @@ export class EscrowService {
         case "OPEN_DISPUTE":
           if (deal.status !== DealStatus.FUNDED) throw new Error("Invalid transition: can only dispute FUNDED deals");
           nextStatus = DealStatus.DISPUTED;
+          break;
+        case "RESOLVE":
+          if (deal.status !== DealStatus.DISPUTED && deal.status !== DealStatus.FUNDED) {
+            throw new Error("Invalid transition: can only resolve DISPUTED or FUNDED deals");
+          }
+          // Fetch ticket to determine if verdict is RELEASE or REFUND
+          const ticket = await tx.resolveTicket.findFirst({
+            where: { dealId: deal.id },
+            orderBy: { issuedAt: "desc" },
+          });
+          if (!ticket) throw new Error("No resolution ticket found");
+          // Set final status based on verdict
+          if (ticket.finalAction === "RELEASE") {
+            nextStatus = DealStatus.RELEASED;
+          } else if (ticket.finalAction === "REFUND") {
+            nextStatus = DealStatus.REFUNDED;
+          } else {
+            throw new Error(`Unsupported verdict: ${ticket.finalAction}`);
+          }
           break;
         case "INITIATE":
         default:
