@@ -39,8 +39,14 @@ interface EscrowSeedsInput {
   dealId: string; // UUID string - required for PDA seeds
 }
 
+/** Seeds scheme: "deal_id" (default) = [escrow, deal_id]; "parties" = [escrow, seller, buyer, mint] (legacy) */
+export function getEscrowPdaSeedsScheme(): "deal_id" | "parties" {
+  const v = process.env.ESCROW_PDA_SEEDS?.toLowerCase();
+  return v === "parties" ? "parties" : "deal_id";
+}
+
 /**
- * Derives the EscrowState PDA using only deal_id as per architecture:
+ * Derives the EscrowState PDA using only deal_id (current program):
  * PDA seeds: ["escrow", deal_id_bytes]
  */
 export function getEscrowPda({ dealId }: EscrowSeedsInput) {
@@ -49,6 +55,28 @@ export function getEscrowPda({ dealId }: EscrowSeedsInput) {
   const seeds = [
     Buffer.from("escrow"),
     dealIdBytes, // deal_id as bytes (16 bytes)
+  ];
+  const [publicKey, bump] = PublicKey.findProgramAddressSync(seeds, solanaConfig.programId);
+  return { publicKey, bump };
+}
+
+/**
+ * Derives the EscrowState PDA using seller, buyer, mint (legacy program / initiate_handler.rs):
+ * PDA seeds: ["escrow", seller, buyer, mint]
+ */
+export function getEscrowPdaWithParties(
+  sellerWallet: string | PublicKey,
+  buyerWallet: string | PublicKey,
+  mint: string | PublicKey
+) {
+  const seller = toPublicKey(sellerWallet);
+  const buyer = toPublicKey(buyerWallet);
+  const mintKey = toPublicKey(mint);
+  const seeds = [
+    Buffer.from("escrow"),
+    seller.toBuffer(),
+    buyer.toBuffer(),
+    mintKey.toBuffer(),
   ];
   const [publicKey, bump] = PublicKey.findProgramAddressSync(seeds, solanaConfig.programId);
   return { publicKey, bump };

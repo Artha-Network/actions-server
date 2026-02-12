@@ -5,9 +5,13 @@
   "type": "commonjs",
   "main": "dist/server.js",
   "scripts": {
+    "postinstall": "prisma generate",
     "dev": "tsx watch server.ts",
     "start": "node dist/server.js",
     "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node ../dev-infra/scripts/validate-env.js && node scripts/sprint4-smoke.js",
+    "test:db": "node scripts/test-db-connection.js",
+    "test:db:pg": "node scripts/test-db-connection-pg.js",
     "migrate:email": "tsx scripts/run-email-migration.ts",
     "migrate:auth-challenge": "tsx scripts/migrate-auth-challenge.ts"
   },
@@ -26,7 +30,7 @@
     "zod": "^3.25.6"
   },
   "devDependencies": {
-    "@types/bs58": "^5.0.0",
+    "pg": "^8.11.3",
     "@types/cookie-parser": "^1.4.10",
     "@types/express": "^4.17.21",
     "@types/node": "^20.12.12",

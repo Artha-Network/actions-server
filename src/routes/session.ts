@@ -1,9 +1,17 @@
-
 import { Router, Request, Response } from 'express';
 import nacl from 'tweetnacl';
 import { PublicKey } from '@solana/web3.js';
 import { decode } from 'bs58';
 import { prisma } from '../lib/prisma';
+
+interface ChallengeRequest {
+  wallet?: string;
+}
+
+interface VerifyRequest {
+  wallet?: string;
+  signature?: number[] | Uint8Array;
+}
 
 const router = Router();
 
@@ -37,6 +45,13 @@ router.post('/verify', async (req: Request<{}, {}, VerifyRequest>, res: Response
     try {
         const { wallet, signature } = req.body;
 
+        if (!wallet || typeof wallet !== 'string') {
+            return res.status(400).json({ error: 'Wallet required' });
+        }
+        if (signature == null || (Array.isArray(signature) && signature.length === 0)) {
+            return res.status(400).json({ error: 'Signature required' });
+        }
+
         // Fetch challenge from DB
         const result = await prisma.$queryRawUnsafe<Array<{ challenge: string }>>(`
             SELECT challenge FROM auth_challenges 
@@ -54,7 +69,7 @@ router.post('/verify', async (req: Request<{}, {}, VerifyRequest>, res: Response
         const messageBytes = new TextEncoder().encode(challenge);
 
         // 2. Decode signature/wallet
-        const signatureBytes = new Uint8Array(signature);
+        const signatureBytes = signature instanceof Uint8Array ? signature : new Uint8Array(signature);
         const publicKeyBytes = decode(wallet);
 
         // 3. Verify

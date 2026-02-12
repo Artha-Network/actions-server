@@ -6,6 +6,7 @@ import express, { Request, Response } from "express";
 import nacl from 'tweetnacl';
 import { PublicKey } from '@solana/web3.js';
 import { decode } from 'bs58';
+import { SolanaNetwork } from "@prisma/client";
 import { prisma } from '../lib/prisma';
 import { upsertWalletIdentity, WalletNetwork } from "../services/user.service";
 import { isBase58Address } from "../utils/validation";
@@ -120,7 +121,7 @@ router.post("/sign-in", async (req: Request, res: Response) => {
         data: {
           walletAddress,
           walletPublicKey: pubkey,
-          network: 'DEVNET' // Default, can be made configurable
+          network: SolanaNetwork.DEVNET
         }
       });
     }

@@ -72,6 +72,13 @@ export const ConfirmActionSchema = z.object({
 
 export type ConfirmActionInput = z.infer<typeof ConfirmActionSchema>;
 
+export const ResolveActionSchema = z.object({
+  dealId: z.string().uuid(),
+  verdict: z.enum(["RELEASE", "REFUND"]).optional(), // If omitted, derived from latest ResolveTicket
+});
+
+export type ResolveActionInput = z.infer<typeof ResolveActionSchema>;
+
 export type ActionResponse = {
   dealId: string;
   txMessageBase64?: string;

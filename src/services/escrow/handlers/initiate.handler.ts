@@ -7,7 +7,7 @@ import { u16ToBuffer, u64ToBuffer, i64ToBuffer } from "../../../solana/anchor";
 import { parseAmountToUnits, toUsdDecimalString } from "../../../utils/amount";
 import { deriveAta } from "../../../solana/token";
 import { buildVersionedTransaction } from "../../../solana/transaction";
-import { dealIdToBytes, ensureDealId, getEscrowPda } from "../../../utils/deal";
+import { dealIdToBytes, ensureDealId, getEscrowPda, getEscrowPdaWithParties, getEscrowPdaSeedsScheme } from "../../../utils/deal";
 import { upsertWalletIdentity, createUserIfMissing } from "../../user.service";
 import { logAction } from "../../../utils/logger";
 import { rpcManager } from "../../../config/solana";
@@ -60,27 +60,28 @@ export async function handleInitiate(
   console.log("[initiate]   Buyer pubkey:", buyerPubkey.toBase58());
   console.log("[initiate]   Arbiter pubkey:", arbiterPubkey.toBase58());
 
+  const pdaSeedsScheme = getEscrowPdaSeedsScheme();
+  console.log("[initiate] PDA seeds scheme:", pdaSeedsScheme);
+
   const dealIdBytes = dealIdToBytes(dealId);
   console.log("[initiate] Step 3: Deal ID to Bytes Conversion");
   console.log("[initiate]   dealId string:", dealId);
   console.log("[initiate]   dealIdBytes length:", dealIdBytes.length, "bytes");
   console.log("[initiate]   dealIdBytes hex:", dealIdBytes.toString("hex"));
-  console.log("[initiate]   dealIdBytes (base64):", dealIdBytes.toString("base64"));
 
   if (dealIdBytes.length !== 16) {
     console.error("[initiate] ❌ ERROR: dealIdBytes length mismatch!");
-    console.error("[initiate]   Expected: 16 bytes");
-    console.error("[initiate]   Got:", dealIdBytes.length, "bytes");
     throw new Error(`dealId bytes must be exactly 16 bytes, got ${dealIdBytes.length}`);
   }
-  console.log("[initiate]   ✅ dealIdBytes is exactly 16 bytes");
 
-  const { publicKey: escrowPda, bump } = getEscrowPda({ dealId });
+  const { publicKey: escrowPda, bump } =
+    pdaSeedsScheme === "parties"
+      ? getEscrowPdaWithParties(input.sellerWallet, input.buyerWallet, solanaConfig.usdcMint.toBase58())
+      : getEscrowPda({ dealId });
+
   console.log("[initiate] Step 4: PDA Derivation");
   console.log("[initiate]   Program ID:", solanaConfig.programId.toBase58());
-  console.log("[initiate]   PDA Seeds:");
-  console.log("[initiate]     [0] 'escrow':", Buffer.from("escrow").toString("hex"), `(${Buffer.from("escrow").length} bytes)`);
-  console.log("[initiate]     [1] dealIdBytes:", dealIdBytes.toString("hex"), `(${dealIdBytes.length} bytes)`);
+  console.log("[initiate]   Seeds scheme:", pdaSeedsScheme);
   console.log("[initiate]   Derived Escrow PDA:", escrowPda.toBase58());
   console.log("[initiate]   Bump:", bump);
 
@@ -342,72 +343,29 @@ export async function handleInitiate(
   const feeBpsBuffer = u16ToBuffer(input.feeBps);
   const disputeAtBuffer = i64ToBuffer(BigInt(disputeAt));
 
-  console.log("[initiate]   Instruction Data Components:");
-  console.log("[initiate]     [0-7]   Discriminator (8 bytes):", discriminator.toString("hex"));
-  console.log("[initiate]     [8-15]  Amount (8 bytes):", amountBuffer.toString("hex"), `(${amountBuffer.length} bytes)`);
-  console.log("[initiate]     [16-17] Fee BPS (2 bytes):", feeBpsBuffer.toString("hex"), `(${feeBpsBuffer.length} bytes)`);
-  console.log("[initiate]     [18-25] Dispute At (8 bytes):", disputeAtBuffer.toString("hex"), `(${disputeAtBuffer.length} bytes)`);
-  console.log("[initiate]     [26-41] Deal ID (16 bytes):", dealIdBytes.toString("hex"), `(${dealIdBytes.length} bytes)`);
+  const data =
+    pdaSeedsScheme === "parties"
+      ? Buffer.concat([discriminator, amountBuffer, feeBpsBuffer, disputeAtBuffer])
+      : Buffer.concat([discriminator, amountBuffer, feeBpsBuffer, disputeAtBuffer, dealIdBytes]);
 
-  const data = Buffer.concat([
-    discriminator,
-    amountBuffer,
-    feeBpsBuffer,
-    disputeAtBuffer,
-    dealIdBytes,
-  ]);
-
-  console.log("[initiate]   Complete Instruction Data:");
-  console.log("[initiate]     Total length:", data.length, "bytes");
-  console.log("[initiate]     Full hex:", data.toString("hex"));
-
-  if (data.length !== 42) {
-    console.error("[initiate] ❌ ERROR: Instruction data length mismatch!");
-    console.error("[initiate]   Expected: 42 bytes (discriminator:8 + amount:8 + fee_bps:2 + dispute_by:8 + deal_id:16)");
-    console.error("[initiate]   Got:", data.length, "bytes");
+  const expectedLen = pdaSeedsScheme === "parties" ? 26 : 42;
+  if (data.length !== expectedLen) {
     throw new Error(
-      `Instruction data must be exactly 42 bytes (discriminator:8 + amount:8 + fee_bps:2 + dispute_by:8 + deal_id:16), got ${data.length} bytes`
+      `Instruction data must be ${expectedLen} bytes (parties: 26, deal_id: 42), got ${data.length}`
     );
   }
-  console.log("[initiate]   ✅ Instruction data is exactly 42 bytes");
 
-  const last16Bytes = data.slice(26, 42);
-  const dealIdBytesMatch = last16Bytes.equals(dealIdBytes);
-  console.log("[initiate]   Verification: Last 16 bytes of instruction data");
-  console.log("[initiate]     Last 16 bytes hex:", last16Bytes.toString("hex"));
-  console.log("[initiate]     Original dealIdBytes hex:", dealIdBytes.toString("hex"));
-  console.log("[initiate]     Match:", dealIdBytesMatch ? "✅ YES" : "❌ NO");
-  if (!dealIdBytesMatch) {
-    console.error("[initiate] ❌ CRITICAL ERROR: Last 16 bytes of instruction data do not match dealIdBytes!");
-    throw new Error("Last 16 bytes of instruction data must match dealIdBytes");
-  }
-
-  console.log("[initiate] Step 7: PDA Consistency Verification");
-  const [verifiedPda, verifiedBump] = PublicKey.findProgramAddressSync(
-    [Buffer.from("escrow"), dealIdBytes],
-    solanaConfig.programId
-  );
-  console.log("[initiate]   Re-derived PDA using same dealIdBytes:");
-  console.log("[initiate]     Verified PDA:", verifiedPda.toBase58());
-  console.log("[initiate]     Verified Bump:", verifiedBump);
-  console.log("[initiate]     Original PDA:", escrowPda.toBase58());
-  console.log("[initiate]     Original Bump:", bump);
-  console.log("[initiate]     PDAs match:", escrowPda.toBase58() === verifiedPda.toBase58() ? "✅ YES" : "❌ NO");
-  console.log("[initiate]     Bumps match:", bump === verifiedBump ? "✅ YES" : "❌ NO");
-
-  const pdaMatches = escrowPda.toBase58() === verifiedPda.toBase58();
-  
-  if (!pdaMatches) {
-    console.error("[initiate] ❌ ERROR: PDA consistency check failed");
-    console.error("[initiate]   Derived PDA:", escrowPda.toBase58());
-    console.error("[initiate]   Verified PDA:", verifiedPda.toBase58());
-    throw new Error(
-      `PDA derivation mismatch: derived ${escrowPda.toBase58()} but verified ${verifiedPda.toBase58()}. ` +
-      `This indicates a problem with deal ID generation or PDA derivation.`
+  if (pdaSeedsScheme === "deal_id") {
+    const [verifiedPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("escrow"), dealIdBytes],
+      solanaConfig.programId
     );
+    if (escrowPda.toBase58() !== verifiedPda.toBase58()) {
+      throw new Error(
+        `PDA derivation mismatch: derived ${escrowPda.toBase58()} but verified ${verifiedPda.toBase58()}`
+      );
+    }
   }
-  
-  console.log("[initiate]   ✅ PDA consistency verified - proceeding with transaction");
 
   const instruction = new TransactionInstruction({
     programId: solanaConfig.programId,

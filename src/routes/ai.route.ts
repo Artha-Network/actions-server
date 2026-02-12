@@ -24,10 +24,12 @@ router.post("/generate-contract", async (req, res) => {
         // Call Arbiter Service
         // Assuming Arbiter Service is running on localhost:3001
         const ARBITER_URL = process.env.ARBITER_SERVICE_URL || "http://localhost:3001";
+        const headers: Record<string, string> = { "Content-Type": "application/json" };
+        if (process.env.ARBITER_ADMIN_KEY) headers["x-admin-key"] = process.env.ARBITER_ADMIN_KEY;
 
         const response = await fetch(`${ARBITER_URL}/generate-contract`, {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers,
             body: JSON.stringify(parsed.data),
         });
 

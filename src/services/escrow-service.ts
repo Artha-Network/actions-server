@@ -9,9 +9,10 @@ import type {
   ActionResponse,
 } from "../types/actions";
 import { DealStatus } from "@prisma/client";
-import { PublicKey, TransactionInstruction } from "@solana/web3.js";
+import { PublicKey, TransactionInstruction, Keypair } from "@solana/web3.js";
 import { solanaConfig } from "../config/solana";
-import { getEscrowPda } from "../utils/deal";
+import { buildVersionedTransaction, buildSignAndSendTransaction } from "../solana/transaction";
+import { getEscrowPda, getEscrowPdaSeedsScheme, getEscrowPdaWithParties } from "../utils/deal";
 import { logAction } from "../utils/logger";
 import { prisma } from "../lib/prisma";
 import { handleInitiate } from "./escrow/handlers/initiate.handler";
@@ -22,9 +23,6 @@ import { handleConfirm } from "./escrow/handlers/confirm.handler";
 import type { ServiceOptions } from "./escrow/types";
 import { resolveReqId, derivePayer, fetchDealSummary } from "./escrow/utils";
 import { OPEN_DISPUTE_DISCRIMINATOR, RESOLVE_DISCRIMINATOR } from "./escrow/constants";
-
-const VERDICT_RELEASE = 1;
-const VERDICT_REFUND = 2;
 
 export class EscrowService {
   async initiate(input: InitiateActionInput, options?: ServiceOptions): Promise<ActionResponse> {
@@ -61,11 +59,13 @@ export class EscrowService {
 
     const callerPubkey = new PublicKey(input.callerWallet);
 
-    // Get escrow PDA
+    // Get escrow PDA (same scheme as initiate: deal_id or parties)
     const actualDealId = deal.id;
-    const { publicKey: escrowPda } = getEscrowPda({
-      dealId: actualDealId,
-    });
+    const pdaScheme = getEscrowPdaSeedsScheme();
+    const { publicKey: escrowPda } =
+      pdaScheme === "parties" && deal.sellerWallet && deal.buyerWallet && deal.depositTokenMint
+        ? getEscrowPdaWithParties(deal.sellerWallet, deal.buyerWallet, deal.depositTokenMint)
+        : getEscrowPda({ dealId: actualDealId });
 
     // OpenDispute instruction only needs discriminator (no additional data)
     const data = OPEN_DISPUTE_DISCRIMINATOR;
@@ -108,84 +108,75 @@ export class EscrowService {
     return handleRefund(input, options);
   }
 
-  async resolve(input: ResolveActionInput, options?: ServiceOptions): Promise<ActionResponse> {
+  async resolve(input: ResolveActionInput, options?: ServiceOptions): Promise<ActionResponse & { txSig?: string }> {
     const reqId = resolveReqId(options);
     const startedAt = Date.now();
+
+    const hex = process.env.ARBITER_ED25519_SECRET_HEX;
+    if (!hex || typeof hex !== "string") {
+      throw new Error("ARBITER_ED25519_SECRET_HEX is not set");
+    }
+    const secretBytes = Buffer.from(hex.replace(/^0x/i, ""), "hex");
+    const arbiterKeypair =
+      secretBytes.length === 64
+        ? Keypair.fromSecretKey(new Uint8Array(secretBytes))
+        : secretBytes.length === 32
+          ? Keypair.fromSeed(new Uint8Array(secretBytes))
+          : (() => {
+              throw new Error("ARBITER_ED25519_SECRET_HEX must be 32 or 64 bytes (hex)");
+            })();
 
     const deal = await fetchDealSummary(input.dealId);
     if (!deal) throw new Error("Deal not found");
 
-    if (deal.status !== DealStatus.RESOLVED) {
-      throw new Error(`Deal must be RESOLVED to execute resolution, current status: ${deal.status}`);
+    if (deal.status !== DealStatus.RESOLVED && deal.status !== DealStatus.DISPUTED) {
+      throw new Error(`Deal must have a resolution (RESOLVED or DISPUTED with ticket) to execute resolve, current: ${deal.status}`);
     }
 
-    // Fetch the resolve ticket from the database
-    const ticket = await prisma.resolveTicket.findFirst({
-      where: { dealId: input.dealId },
-      orderBy: { issuedAt: "desc" },
-    });
-
-    if (!ticket) {
-      throw new Error("No resolution ticket found for this deal");
-    }
-
-    // Validate arbiter wallet matches
-    if (ticket.arbiterPubkey !== input.arbiterWallet) {
-      throw new Error("Arbiter wallet does not match the ticket");
-    }
-
-    // Map TicketAction to verdict value
-    let verdict: number;
-    if (ticket.finalAction === "RELEASE") {
-      verdict = VERDICT_RELEASE;
-    } else if (ticket.finalAction === "REFUND") {
-      verdict = VERDICT_REFUND;
+    let verdictU8: number;
+    if (input.verdict) {
+      verdictU8 = input.verdict === "RELEASE" ? 1 : 2;
     } else {
-      throw new Error(`Unsupported ticket action: ${ticket.finalAction}. SPLIT is not supported in current on-chain program.`);
+      const ticket = await prisma.resolveTicket.findFirst({
+        where: { dealId: input.dealId },
+        orderBy: { issuedAt: "desc" },
+      });
+      if (!ticket) throw new Error("No resolution ticket found; call arbitrate first or pass verdict");
+      verdictU8 = ticket.finalAction === "RELEASE" ? 1 : 2;
     }
 
-    const arbiterPubkey = new PublicKey(input.arbiterWallet);
+    const pdaScheme = getEscrowPdaSeedsScheme();
+    const { publicKey: escrowPda } =
+      pdaScheme === "parties" && deal.sellerWallet && deal.buyerWallet && deal.depositTokenMint
+        ? getEscrowPdaWithParties(deal.sellerWallet, deal.buyerWallet, deal.depositTokenMint)
+        : getEscrowPda({ dealId: deal.id });
 
-    // Get escrow PDA
-    const actualDealId = deal.id;
-    const { publicKey: escrowPda } = getEscrowPda({
-      dealId: actualDealId,
-    });
-
-    // Resolve instruction: discriminator + verdict (u8)
-    const data = Buffer.concat([RESOLVE_DISCRIMINATOR, Buffer.from([verdict])]);
-
-    // Resolve struct account order (from on-chain):
-    // 1. arbiter (signer, not writable)
-    // 2. escrow_state (PDA, writable)
+    const data = Buffer.concat([RESOLVE_DISCRIMINATOR, Buffer.from([verdictU8])]);
     const programIx = new TransactionInstruction({
       programId: solanaConfig.programId,
       keys: [
-        { pubkey: arbiterPubkey, isSigner: true, isWritable: false },
+        { pubkey: arbiterKeypair.publicKey, isSigner: true, isWritable: false },
         { pubkey: escrowPda, isSigner: false, isWritable: true },
       ],
       data,
     });
 
-    const payerKey = derivePayer(arbiterPubkey);
-    const txResult = await buildVersionedTransaction([programIx], payerKey);
+    const result = await buildSignAndSendTransaction([programIx], arbiterKeypair);
 
     logAction({
       reqId,
       action: "actions.resolve",
-      dealId: deal.id,
-      wallet: input.arbiterWallet,
+      dealId: input.dealId,
       durationMs: Date.now() - startedAt,
       status: deal.status,
     });
 
     return {
-      dealId: deal.id,
-      txMessageBase64: txResult.txMessageBase64,
-      nextClientAction: "confirm",
-      latestBlockhash: txResult.latestBlockhash,
-      lastValidBlockHeight: txResult.lastValidBlockHeight,
-      feePayer: payerKey.toBase58(),
+      dealId: input.dealId,
+      txSig: result.txSig,
+      nextClientAction: verdictU8 === 1 ? "release" : "refund",
+      latestBlockhash: result.latestBlockhash,
+      lastValidBlockHeight: result.lastValidBlockHeight,
     };
   }
 

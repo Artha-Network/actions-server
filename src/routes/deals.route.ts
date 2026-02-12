@@ -452,14 +452,15 @@ router.post('/:id/arbitrate', async (req, res) => {
 
     // 6. Call arbiter service
     const ARBITER_SERVICE_URL = process.env.ARBITER_SERVICE_URL || 'http://localhost:3001';
+    const adminKey = process.env.ARBITER_ADMIN_KEY;
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (adminKey) headers['x-admin-key'] = adminKey;
 
     let arbiterResponse;
     try {
       const response = await fetch(`${ARBITER_SERVICE_URL}/arbitrate`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers,
         body: JSON.stringify(arbitrationRequest)
       });
 

@@ -6,7 +6,7 @@ import { solanaConfig } from "../../../config/solana";
 import { parseAmountToUnits } from "../../../utils/amount";
 import { buildIdempotentCreateAtaIx } from "../../../solana/token";
 import { buildVersionedTransaction } from "../../../solana/transaction";
-import { dealIdToBytes, getEscrowPda } from "../../../utils/deal";
+import { dealIdToBytes, getEscrowPda, getEscrowPdaWithParties, getEscrowPdaSeedsScheme } from "../../../utils/deal";
 import { logAction } from "../../../utils/logger";
 import { rpcManager } from "../../../config/solana";
 import { withRpcRetry } from "../../../utils/rpc-retry";
@@ -43,36 +43,23 @@ export async function handleFund(
   const amountUnits = parseAmountToUnits(input.amount);
   
   const actualDealId = deal.id;
-  const { publicKey: escrowPda, bump } = getEscrowPda({
-    dealId: actualDealId,
-  });
-  
-  console.log("=== Fund PDA Debug ===");
-  console.log("Input Deal ID:", input.dealId);
-  console.log("Actual Deal ID (from DB):", actualDealId);
-  console.log("Program ID:", solanaConfig.programId.toBase58());
-  console.log("Derived Escrow PDA:", escrowPda.toBase58());
-  console.log("Bump:", bump);
-  
+  const pdaScheme = getEscrowPdaSeedsScheme();
+  const { publicKey: escrowPda, bump } =
+    pdaScheme === "parties" && deal.sellerWallet && deal.buyerWallet && deal.depositTokenMint
+      ? getEscrowPdaWithParties(deal.sellerWallet, deal.buyerWallet, deal.depositTokenMint)
+      : getEscrowPda({ dealId: actualDealId });
+
   const dealIdBytes = dealIdToBytes(actualDealId);
-  const expectedSeeds = [
-    Buffer.from("escrow"),
-    dealIdBytes,
-  ];
-  const [verifiedPda, verifiedBump] = PublicKey.findProgramAddressSync(
-    expectedSeeds,
-    solanaConfig.programId
-  );
-  
-  const pdaMatches = escrowPda.toBase58() === verifiedPda.toBase58();
-  if (!pdaMatches) {
-    console.error("[fund] ❌ ERROR: PDA mismatch");
-    console.error("[fund]   Derived PDA:", escrowPda.toBase58());
-    console.error("[fund]   Verified PDA:", verifiedPda.toBase58());
-    throw new Error(
-      `PDA derivation mismatch: derived ${escrowPda.toBase58()} but verified ${verifiedPda.toBase58()}. ` +
-      `This indicates a problem with deal ID or PDA derivation.`
+  if (pdaScheme === "deal_id") {
+    const [verifiedPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("escrow"), dealIdBytes],
+      solanaConfig.programId
     );
+    if (escrowPda.toBase58() !== verifiedPda.toBase58()) {
+      throw new Error(
+        `PDA derivation mismatch: derived ${escrowPda.toBase58()} but verified ${verifiedPda.toBase58()}`
+      );
+    }
   }
   
   let escrowAccountInfo = null;

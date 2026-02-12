@@ -1,9 +1,15 @@
-import { TransactionInstruction, TransactionMessage, VersionedTransaction, PublicKey, SimulatedTransactionResponse } from "@solana/web3.js";
+import { TransactionInstruction, TransactionMessage, VersionedTransaction, PublicKey, Keypair, SimulatedTransactionResponse } from "@solana/web3.js";
 import { connection, rpcManager } from "../config/solana";
 import { withRpcRetry } from "../utils/rpc-retry";
 
 export interface BuildTransactionResult {
   txMessageBase64: string;
+  latestBlockhash: string;
+  lastValidBlockHeight: number;
+}
+
+export interface SignAndSendResult {
+  txSig: string;
   latestBlockhash: string;
   lastValidBlockHeight: number;
 }
@@ -61,6 +67,47 @@ export async function buildVersionedTransaction(
 
   return {
     txMessageBase64: Buffer.from(serialized).toString("base64"),
+    latestBlockhash: blockhash,
+    lastValidBlockHeight,
+  };
+}
+
+/**
+ * Build a versioned transaction, sign it with the given keypair, and send it.
+ * Used for server-signed actions (e.g. arbiter resolve).
+ */
+export async function buildSignAndSendTransaction(
+  instructions: TransactionInstruction[],
+  signerKeypair: Keypair
+): Promise<SignAndSendResult> {
+  const { blockhash, lastValidBlockHeight } = await withRpcRetry(
+    async (conn) => conn.getLatestBlockhash("finalized"),
+    { endpointManager: rpcManager }
+  );
+
+  const message = new TransactionMessage({
+    payerKey: signerKeypair.publicKey,
+    recentBlockhash: blockhash,
+    instructions,
+  }).compileToV0Message();
+
+  const transaction = new VersionedTransaction(message);
+  transaction.sign([signerKeypair]);
+
+  const txSig = await withRpcRetry(
+    async (conn) => {
+      const sig = await conn.sendTransaction(transaction, {
+        skipPreflight: false,
+        preflightCommitment: "confirmed",
+        maxRetries: 3,
+      });
+      return sig;
+    },
+    { endpointManager: rpcManager }
+  );
+
+  return {
+    txSig,
     latestBlockhash: blockhash,
     lastValidBlockHeight,
   };
