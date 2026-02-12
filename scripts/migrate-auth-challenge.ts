@@ -6,14 +6,12 @@ async function main() {
     console.log("Running migration: Create auth_challenges table...");
 
     try {
-        // Create table
+        // Create table - wallet_address is the primary key (matches Prisma schema)
         await prisma.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS auth_challenges (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        wallet_address TEXT NOT NULL UNIQUE,
+        wallet_address TEXT PRIMARY KEY,
         challenge TEXT NOT NULL,
-        expires_at TIMESTAMP NOT NULL,
-        created_at TIMESTAMP DEFAULT NOW()
+        expires_at TIMESTAMP NOT NULL
       );
     `);
         console.log("✅ auth_challenges table created (or exists)");

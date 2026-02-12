@@ -95,14 +95,33 @@ router.get('/me', async (req: Request, res: Response) => {
     }
 
     try {
-        const sessionData = JSON.parse(session);
-        const wallet = sessionData.wallet;
+        // Parse and validate session cookie
+        let sessionData;
+        try {
+            sessionData = JSON.parse(session);
+        } catch (parseError) {
+            // Invalid JSON in cookie - clear it and return unauthorized
+            res.clearCookie('artha_session');
+            return res.status(401).json({ error: 'Invalid session format' });
+        }
 
-        if (!wallet) {
+        const wallet = sessionData?.wallet;
+
+        if (!wallet || typeof wallet !== 'string') {
+            res.clearCookie('artha_session');
             return res.status(401).json({ error: 'Invalid session' });
         }
 
-        // Fetch user profile from database
+        // Validate wallet address format (basic Solana address validation)
+        try {
+            new PublicKey(wallet);
+        } catch (pubkeyError) {
+            // Invalid wallet address format - clear cookie and return unauthorized
+            res.clearCookie('artha_session');
+            return res.status(401).json({ error: 'Invalid wallet address in session' });
+        }
+
+        // Fetch user profile from database to verify session is valid
         const userProfile = await prisma.user.findUnique({
             where: { walletAddress: wallet },
             select: {
@@ -115,8 +134,11 @@ router.get('/me', async (req: Request, res: Response) => {
             },
         });
 
+        // Note: We allow sessions even if user doesn't exist in DB yet (new users)
+        // This allows them to complete profile creation
         if (!userProfile) {
             // User doesn't exist in DB yet - this is a new user
+            // Session is still valid, they just need to complete profile
             return res.json({ user: { wallet, authenticated: true, isNewUser: true, profileComplete: false } });
         }
 
@@ -139,6 +161,8 @@ router.get('/me', async (req: Request, res: Response) => {
         });
     } catch (error) {
         console.error('Session /me error:', error);
+        // Clear invalid cookie on any error
+        res.clearCookie('artha_session');
         return res.status(401).json({ error: 'Invalid session' });
     }
 });

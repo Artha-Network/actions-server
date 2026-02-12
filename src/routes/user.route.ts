@@ -30,37 +30,24 @@ router.post("/", async (req, res) => {
 
 // GET /api/users/me - Get current user profile
 router.get("/me", async (req, res) => {
-  const session = req.cookies['artha_session'];
+  const sessionId = req.cookies['artha_session'];
   
-  if (!session) {
+  if (!sessionId) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
   try {
-    const sessionData = JSON.parse(session);
-    const wallet = sessionData.wallet;
+    // Get session from database
+    const session = await prisma.session.findUnique({
+      where: { sessionId },
+      include: { user: true }
+    });
 
-    if (!wallet) {
+    if (!session || !session.user) {
       return res.status(401).json({ error: 'Invalid session' });
     }
 
-    const user = await prisma.user.findUnique({
-      where: { walletAddress: wallet },
-      select: {
-        id: true,
-        walletAddress: true,
-        displayName: true,
-        emailAddress: true,
-        reputationScore: true,
-        kycLevel: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-    });
-
-    if (!user) {
-      return res.status(404).json({ error: 'User not found' });
-    }
+    const user = session.user;
 
     return res.json({
       id: user.id,
@@ -80,17 +67,20 @@ router.get("/me", async (req, res) => {
 
 // PATCH /api/users/me - Update user profile
 router.patch("/me", async (req, res) => {
-  const session = req.cookies['artha_session'];
+  const sessionId = req.cookies['artha_session'];
   
-  if (!session) {
+  if (!sessionId) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
   try {
-    const sessionData = JSON.parse(session);
-    const wallet = sessionData.wallet;
+    // Get session from database
+    const session = await prisma.session.findUnique({
+      where: { sessionId },
+      include: { user: true }
+    });
 
-    if (!wallet) {
+    if (!session || !session.userId) {
       return res.status(401).json({ error: 'Invalid session' });
     }
 
@@ -120,33 +110,15 @@ router.patch("/me", async (req, res) => {
       }
     }
 
-    // Check if user exists, if not create them
-    let user = await prisma.user.findUnique({
-      where: { walletAddress: wallet },
+    // Update user profile
+    const user = await prisma.user.update({
+      where: { id: session.userId },
+      data: {
+        ...(displayName !== undefined && { displayName: displayName.trim() || null }),
+        ...(emailAddress !== undefined && { emailAddress: emailAddress?.trim() || null }),
+        updatedAt: new Date(),
+      },
     });
-
-    if (!user) {
-      // User doesn't exist - create them when they set up their profile
-      user = await prisma.user.create({
-        data: {
-          walletAddress: wallet,
-          walletPublicKey: wallet,
-          displayName: displayName?.trim() || null,
-          emailAddress: emailAddress?.trim() || null,
-          lastSeenAt: new Date(),
-        },
-      });
-    } else {
-      // User exists - update their profile
-      user = await prisma.user.update({
-        where: { walletAddress: wallet },
-        data: {
-          ...(displayName !== undefined && { displayName: displayName.trim() || null }),
-          ...(emailAddress !== undefined && { emailAddress: emailAddress?.trim() || null }),
-          updatedAt: new Date(),
-        },
-      });
-    }
 
     return res.json({
       id: user.id,
@@ -159,8 +131,12 @@ router.patch("/me", async (req, res) => {
     });
   } catch (error) {
     console.error('PATCH /api/users/me error:', error);
-    if (error instanceof Error && error.message.includes('Record to update not found')) {
-      return res.status(404).json({ error: 'User not found' });
+    if (error instanceof Error) {
+      if (error.message.includes('Record to update not found')) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+      // Log the actual error for debugging
+      console.error('Error details:', error.message, error.stack);
     }
     return res.status(500).json({ error: 'Internal Server Error' });
   }

@@ -83,6 +83,7 @@ model User {
   dealsAsBuyer      Deal[]        @relation("BuyerDeals")
   submittedEvidence Evidence[]
   attestations      Attestation[] @relation("UserAttestations")
+  sessions          Session[]
   // DB has a CHECK that either wallet_public_key or email_address is not null
 
   @@map("users")
@@ -225,4 +226,35 @@ model OnchainEvent {
 
   @@index([dealId], map: "onchain_events_deal_idx")
   @@map("onchain_events")
+}
+
+model AuthChallenge {
+  walletAddress String   @id @map("wallet_address")
+  challenge     String
+  expiresAt     DateTime @map("expires_at")
+
+  @@map("auth_challenges")
+}
+
+model Session {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId     String   @unique @map("session_id") // Used in cookies/tokens
+  userId        String?  @map("user_id") @db.Uuid
+  walletAddress String?  @map("wallet_address") // For wallet-based auth
+  createdAt     DateTime @default(now()) @map("created_at")
+  lastSeen      DateTime @default(now()) @map("last_seen")
+  expiresAt     DateTime @map("expires_at")
+  ip            String?
+  userAgent     String?  @map("user_agent")
+  deviceLabel   String?  @map("device_label")
+
+  // Relations
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId], map: "sessions_session_id_idx")
+  @@index([userId], map: "sessions_user_id_idx")
+  @@index([walletAddress], map: "sessions_wallet_address_idx")
+  @@index([expiresAt], map: "sessions_expires_at_idx")
+  @@index([lastSeen], map: "sessions_last_seen_idx")
+  @@map("sessions")
 }
