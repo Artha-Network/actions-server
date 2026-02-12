@@ -7,6 +7,7 @@ import {
   FundActionInput,
   ReleaseActionInput,
   RefundActionInput,
+  OpenDisputeActionInput,
   ConfirmActionInput,
   ActionResponse,
 } from "../types/actions";
@@ -50,6 +51,7 @@ const INITIATE_DISCRIMINATOR = getInstructionDiscriminator("initiate");
 const FUND_DISCRIMINATOR = getInstructionDiscriminator("fund");
 const RELEASE_DISCRIMINATOR = getInstructionDiscriminator("release");
 const REFUND_DISCRIMINATOR = getInstructionDiscriminator("refund");
+const OPEN_DISPUTE_DISCRIMINATOR = getInstructionDiscriminator("open_dispute");
 
 function resolveReqId(options?: ServiceOptions) {
   return options?.reqId ?? randomUUID();
@@ -884,6 +886,71 @@ export class EscrowService {
     };
   }
 
+  async openDispute(input: OpenDisputeActionInput, options?: ServiceOptions): Promise<ActionResponse> {
+    const reqId = resolveReqId(options);
+    const startedAt = Date.now();
+
+    const deal = await fetchDealSummary(input.dealId);
+    if (!deal) throw new Error("Deal not found");
+
+    if (deal.status !== DealStatus.FUNDED) {
+      throw new Error(`Deal status ${deal.status} cannot open dispute`);
+    }
+
+    if (!deal.sellerWallet || !deal.buyerWallet) {
+      throw new Error("Deal is missing buyer or seller wallet");
+    }
+
+    // Validate caller is buyer or seller
+    if (input.callerWallet !== deal.buyerWallet && input.callerWallet !== deal.sellerWallet) {
+      throw new Error("Caller must be buyer or seller");
+    }
+
+    const callerPubkey = new PublicKey(input.callerWallet);
+
+    // Use deal.id from database
+    const actualDealId = deal.id;
+    const { publicKey: escrowPda } = getEscrowPda({
+      dealId: actualDealId,
+    });
+
+    // open_dispute instruction takes no parameters (no deal_id)
+    const data = Buffer.from(OPEN_DISPUTE_DISCRIMINATOR);
+
+    // OpenDispute instruction accounts:
+    // 1. caller (signer, writable)
+    // 2. escrow_state (PDA, writable)
+    const programIx = new TransactionInstruction({
+      programId: solanaConfig.programId,
+      keys: [
+        { pubkey: callerPubkey, isSigner: true, isWritable: true },
+        { pubkey: escrowPda, isSigner: false, isWritable: true },
+      ],
+      data,
+    });
+
+    const payerKey = derivePayer(callerPubkey);
+    const txResult = await buildVersionedTransaction([programIx], payerKey);
+
+    logAction({
+      reqId,
+      action: "actions.open-dispute",
+      dealId: deal.id,
+      wallet: input.callerWallet,
+      durationMs: Date.now() - startedAt,
+      status: deal.status,
+    });
+
+    return {
+      dealId: deal.id,
+      txMessageBase64: txResult.txMessageBase64,
+      nextClientAction: "confirm",
+      latestBlockhash: txResult.latestBlockhash,
+      lastValidBlockHeight: txResult.lastValidBlockHeight,
+      feePayer: payerKey.toBase58(),
+    };
+  }
+
   async confirm(input: ConfirmActionInput, options?: ServiceOptions) {
     const reqId = resolveReqId(options);
     const startedAt = Date.now();
@@ -905,9 +972,21 @@ export class EscrowService {
       const deal = await tx.deal.findUnique({ where: { id: input.dealId } });
       if (!deal) throw new Error("Deal not found");
 
-      const expectedWallet =
-        input.action === "FUND" || input.action === "RELEASE" ? deal.buyerWallet : deal.sellerWallet;
-      if (expectedWallet !== input.actorWallet) throw new Error("Actor wallet mismatch");
+      let expectedWallet: string | null;
+      if (input.action === "FUND" || input.action === "RELEASE") {
+        expectedWallet = deal.buyerWallet;
+      } else if (input.action === "OPEN_DISPUTE") {
+        // For OPEN_DISPUTE, either buyer or seller can be the actor
+        expectedWallet = (deal.buyerWallet === input.actorWallet || deal.sellerWallet === input.actorWallet)
+          ? input.actorWallet
+          : null;
+      } else {
+        expectedWallet = deal.sellerWallet;
+      }
+
+      if (!expectedWallet || expectedWallet !== input.actorWallet) {
+        throw new Error("Actor wallet mismatch");
+      }
 
       let nextStatus: DealStatus;
       switch (input.action) {
@@ -922,6 +1001,10 @@ export class EscrowService {
         case "REFUND":
           if (!(deal.status === DealStatus.FUNDED || deal.status === DealStatus.RESOLVED)) throw new Error("Invalid transition");
           nextStatus = DealStatus.REFUNDED;
+          break;
+        case "OPEN_DISPUTE":
+          if (deal.status !== DealStatus.FUNDED) throw new Error("Invalid transition");
+          nextStatus = DealStatus.DISPUTED;
           break;
         case "INITIATE":
         default:
