@@ -63,6 +63,12 @@ const DEFAULT_PROGRAM_ID = "B1a1oejNg8uWz7USuuFSqmRQRUSZ95kk2e4PzRZ7Uti4";
 const PROGRAM_ID_RAW = process.env.PROGRAM_ID ?? process.env.NEXT_PUBLIC_PROGRAM_ID ?? DEFAULT_PROGRAM_ID;
 const USDC_MINT_RAW = process.env.USDC_MINT ?? process.env.NEXT_PUBLIC_USDC_MINT;
 
+// Cluster-specific default USDC mints (use correct mint per cluster to avoid AccountOwnedByWrongProgram 0xbbf)
+const DEVNET_USDC_MINT = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+const MAINNET_USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+const DEFAULT_USDC_MINT_BY_CLUSTER =
+  SOLANA_CLUSTER === "mainnet-beta" ? MAINNET_USDC_MINT : DEVNET_USDC_MINT;
+
 // Helper to safely parse keys
 function parseKey(raw: string | undefined, name: string, fallback?: string) {
   if (!raw) {
@@ -90,7 +96,12 @@ function parseKey(raw: string | undefined, name: string, fallback?: string) {
 }
 
 const PROGRAM_ID = parseKey(PROGRAM_ID_RAW, 'PROGRAM_ID', DEFAULT_PROGRAM_ID)!;
-const USDC_MINT = parseKey(USDC_MINT_RAW, 'USDC_MINT')!;
+let USDC_MINT = parseKey(USDC_MINT_RAW, 'USDC_MINT', DEFAULT_USDC_MINT_BY_CLUSTER)!;
+// If cluster is devnet but user set mainnet USDC mint, use devnet mint to avoid AccountOwnedByWrongProgram 0xbbf
+if (SOLANA_CLUSTER !== "mainnet-beta" && USDC_MINT.equals(new PublicKey(MAINNET_USDC_MINT))) {
+  console.warn(`[config] Cluster is ${SOLANA_CLUSTER}; mainnet USDC mint not valid here. Using devnet USDC mint: ${DEVNET_USDC_MINT}`);
+  USDC_MINT = new PublicKey(DEVNET_USDC_MINT);
+}
 
 // Log program ID on module load for debugging
 if (process.env.NODE_ENV !== 'test') {

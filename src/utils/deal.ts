@@ -46,18 +46,25 @@ export function getEscrowPdaSeedsScheme(): "deal_id" | "parties" {
 }
 
 /**
+ * Derives the EscrowState PDA from raw deal_id bytes (must match instruction data exactly).
+ * PDA seeds: ["escrow", deal_id_bytes] — use the same Buffer for instruction data to avoid ConstraintSeeds 2006.
+ */
+export function getEscrowPdaFromBytes(dealIdBytes: Buffer) {
+  if (dealIdBytes.length !== 16) {
+    throw new Error(`dealIdBytes must be 16 bytes, got ${dealIdBytes.length}`);
+  }
+  const seeds = [Buffer.from("escrow"), dealIdBytes];
+  const [publicKey, bump] = PublicKey.findProgramAddressSync(seeds, solanaConfig.programId);
+  return { publicKey, bump };
+}
+
+/**
  * Derives the EscrowState PDA using only deal_id (current program):
  * PDA seeds: ["escrow", deal_id_bytes]
  */
 export function getEscrowPda({ dealId }: EscrowSeedsInput) {
   const dealIdBytes = dealIdToBytes(dealId);
-
-  const seeds = [
-    Buffer.from("escrow"),
-    dealIdBytes, // deal_id as bytes (16 bytes)
-  ];
-  const [publicKey, bump] = PublicKey.findProgramAddressSync(seeds, solanaConfig.programId);
-  return { publicKey, bump };
+  return getEscrowPdaFromBytes(dealIdBytes);
 }
 
 /**

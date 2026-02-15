@@ -7,7 +7,7 @@ import { u16ToBuffer, u64ToBuffer, i64ToBuffer } from "../../../solana/anchor";
 import { parseAmountToUnits, toUsdDecimalString } from "../../../utils/amount";
 import { deriveAta } from "../../../solana/token";
 import { buildVersionedTransaction } from "../../../solana/transaction";
-import { dealIdToBytes, ensureDealId, getEscrowPda, getEscrowPdaWithParties, getEscrowPdaSeedsScheme } from "../../../utils/deal";
+import { dealIdToBytes, ensureDealId, getEscrowPdaFromBytes, getEscrowPda, getEscrowPdaWithParties, getEscrowPdaSeedsScheme } from "../../../utils/deal";
 import { upsertWalletIdentity, createUserIfMissing } from "../../user.service";
 import { logAction } from "../../../utils/logger";
 import { rpcManager } from "../../../config/solana";
@@ -74,10 +74,11 @@ export async function handleInitiate(
     throw new Error(`dealId bytes must be exactly 16 bytes, got ${dealIdBytes.length}`);
   }
 
+  // Use same dealIdBytes for PDA and instruction to avoid ConstraintSeeds 2006 (program Left vs our Right)
   const { publicKey: escrowPda, bump } =
     pdaSeedsScheme === "parties"
       ? getEscrowPdaWithParties(input.sellerWallet, input.buyerWallet, solanaConfig.usdcMint.toBase58())
-      : getEscrowPda({ dealId });
+      : getEscrowPdaFromBytes(dealIdBytes);
 
   console.log("[initiate] Step 4: PDA Derivation");
   console.log("[initiate]   Program ID:", solanaConfig.programId.toBase58());
@@ -92,6 +93,24 @@ export async function handleInitiate(
   const vaultAta = deriveAta(solanaConfig.usdcMint, vaultAuthority, true);
   console.log("[initiate]   Vault Authority PDA:", vaultAuthority.toBase58(), "(bump:", vaultBump + ")");
   console.log("[initiate]   Vault ATA:", vaultAta.toBase58());
+
+  // Validate mint is a real SPL Token mint on this cluster (avoids AccountOwnedByWrongProgram 0xbbf)
+  const mintAccountInfo = await withRpcRetry(
+    async (conn) => conn.getAccountInfo(solanaConfig.usdcMint),
+    { endpointManager: rpcManager }
+  );
+  const tokenProgramId = TOKEN_PROGRAM_ID;
+  if (!mintAccountInfo || !mintAccountInfo.owner.equals(tokenProgramId)) {
+    const actualOwner = mintAccountInfo?.owner?.toBase58() ?? "11111111111111111111111111111111";
+    const devnetMint = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
+    const mainnetMint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+    throw new Error(
+      `The configured USDC mint (${solanaConfig.usdcMint.toBase58()}) is not a valid SPL Token mint on this cluster (${solanaConfig.cluster}). ` +
+        `Account owner: ${actualOwner} (expected Token Program: ${tokenProgramId.toBase58()}). ` +
+        `For devnet set USDC_MINT=${devnetMint}. For mainnet set USDC_MINT=${mainnetMint}.`
+    );
+  }
+  console.log("[initiate]   Mint validated (Token Program):", solanaConfig.usdcMint.toBase58());
 
   const escrowAccountInfo = await withRpcRetry(
     async (conn) => conn.getAccountInfo(escrowPda),
@@ -354,6 +373,12 @@ export async function handleInitiate(
       `Instruction data must be ${expectedLen} bytes (parties: 26, deal_id: 42), got ${data.length}`
     );
   }
+  // Ensure deal_id in instruction matches PDA seeds (ConstraintSeeds 2006)
+  if (pdaSeedsScheme === "deal_id" && data.length >= 42 && !data.subarray(26, 42).equals(dealIdBytes)) {
+    throw new Error(
+      `Instruction deal_id bytes (data[26:42]) must equal dealIdBytes used for PDA; mismatch would cause ConstraintSeeds 2006`
+    );
+  }
 
   if (pdaSeedsScheme === "deal_id") {
     const [verifiedPda] = PublicKey.findProgramAddressSync(
@@ -365,6 +390,7 @@ export async function handleInitiate(
         `PDA derivation mismatch: derived ${escrowPda.toBase58()} but verified ${verifiedPda.toBase58()}`
       );
     }
+    console.log("[initiate]   PDA from deal_id bytes (must match program Left):", verifiedPda.toBase58());
   }
 
   const instruction = new TransactionInstruction({
