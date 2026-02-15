@@ -9,6 +9,8 @@ const GenerateContractSchema = z.object({
     counterparty: z.string(),
     amount: z.string(),
     description: z.string().optional(),
+    initiatorDeadline: z.string().optional(),
+    completionDeadline: z.string().optional(),
     deliveryDeadline: z.string().optional(),
     disputeDeadline: z.string().optional(),
 });
@@ -20,6 +22,8 @@ router.post("/generate-contract", async (req, res) => {
         if (!parsed.success) {
             return res.status(400).json({ error: parsed.error.message });
         }
+
+        console.log("[AI] Forwarding contract generation request with deal details:", JSON.stringify(parsed.data, null, 2));
 
         // Call Arbiter Service
         // Assuming Arbiter Service is running on localhost:3001
