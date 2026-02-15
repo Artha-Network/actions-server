@@ -13,7 +13,10 @@
     "test:db": "node scripts/test-db-connection.js",
     "test:db:pg": "node scripts/test-db-connection-pg.js",
     "migrate:email": "tsx scripts/run-email-migration.ts",
-    "migrate:auth-challenge": "tsx scripts/migrate-auth-challenge.ts"
+    "migrate:auth-challenge": "tsx scripts/migrate-auth-challenge.ts",
+    "verify:schema": "tsx scripts/verify-schema.ts",
+    "verify:setup": "tsx scripts/verify-setup.ts",
+    "generate:arbiter": "tsx scripts/generate-arbiter-keypair.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.22.0",
