@@ -21,6 +21,7 @@ export const InitiateActionSchema = z.object({
   sellerEmail: z.string().email().optional().or(z.literal("")),
   clientDealId: z.string().uuid().optional(),
   payer: WalletSchema,
+  metadata: z.record(z.unknown()).optional(),
 });
 
 export type InitiateActionInput = z.infer<typeof InitiateActionSchema>;

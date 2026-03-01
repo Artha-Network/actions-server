@@ -142,5 +142,61 @@ router.patch("/me", async (req, res) => {
   }
 });
 
+// GET /api/users/:wallet/reputation - Calculate reputation score for a wallet
+router.get("/:wallet/reputation", async (req, res) => {
+  const { wallet } = req.params;
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { walletAddress: wallet },
+      select: { id: true, reputationScore: true },
+    });
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Count deals for this user
+    const [releasedAsSeller, releasedAsBuyer, disputeWins, disputeLosses] = await Promise.all([
+      prisma.deal.count({ where: { sellerId: user.id, status: "RELEASED" } }),
+      prisma.deal.count({ where: { buyerId: user.id, status: "RELEASED" } }),
+      // "Win" = deal resolved in your favour
+      prisma.resolveTicket.count({
+        where: {
+          OR: [
+            { finalAction: "RELEASE", deal: { sellerId: user.id } },
+            { finalAction: "REFUND", deal: { buyerId: user.id } },
+          ],
+        },
+      }),
+      prisma.resolveTicket.count({
+        where: {
+          OR: [
+            { finalAction: "REFUND", deal: { sellerId: user.id } },
+            { finalAction: "RELEASE", deal: { buyerId: user.id } },
+          ],
+        },
+      }),
+    ]);
+
+    const completedDeals = releasedAsSeller + releasedAsBuyer;
+    const score = Math.min(
+      100,
+      Math.max(0, 50 + completedDeals * 10 + disputeWins * 5 - disputeLosses * 5)
+    );
+
+    // Update stored score
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { reputationScore: score },
+    });
+
+    return res.json({ wallet, score, completedDeals, disputeWins, disputeLosses });
+  } catch (error) {
+    console.error("GET /api/users/:wallet/reputation error:", error);
+    return res.status(500).json({ error: "Internal Server Error" });
+  }
+});
+
 export default router;
 

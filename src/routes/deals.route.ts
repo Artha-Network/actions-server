@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { createUserIfMissing } from '../services/user.service';
 import { prisma } from '../lib/prisma';
+import { createNotificationByWallet } from '../services/notification.service';
 
 const router = Router();
 
@@ -445,8 +446,12 @@ router.post('/:id/arbitrate', async (req, res) => {
           extracted_text: evidenceType === 'text' ? e.cid : undefined
         };
       }),
-      seller_claim: 'I fulfilled my obligations as agreed', // Default claim
-      buyer_claim: 'The terms were not met as specified' // Default claim
+      seller_claim: deal.metadata && typeof deal.metadata === 'object' && !Array.isArray(deal.metadata)
+        ? `I fulfilled my obligations as agreed. Vehicle details: ${JSON.stringify(deal.metadata)}`
+        : 'I fulfilled my obligations as agreed',
+      buyer_claim: deal.metadata && typeof deal.metadata === 'object' && !Array.isArray(deal.metadata)
+        ? `The terms were not met as specified. Vehicle details: ${JSON.stringify(deal.metadata)}`
+        : 'The terms were not met as specified'
     };
 
     // 6. Call arbiter service
@@ -457,11 +462,15 @@ router.post('/:id/arbitrate', async (req, res) => {
 
     let arbiterResponse;
     try {
+      const arbiterAbortController = new AbortController();
+      const arbiterTimeout = setTimeout(() => arbiterAbortController.abort(), 30_000);
       const response = await fetch(`${ARBITER_SERVICE_URL}/arbitrate`, {
         method: 'POST',
         headers,
-        body: JSON.stringify(arbitrationRequest)
+        body: JSON.stringify(arbitrationRequest),
+        signal: arbiterAbortController.signal,
       });
+      clearTimeout(arbiterTimeout);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -501,7 +510,23 @@ router.post('/:id/arbitrate', async (req, res) => {
       data: { status: 'RESOLVED' }
     });
 
-    // 10. Return the ticket to client
+    // 10. Notify both parties of the arbitration result (non-blocking)
+    if (deal.buyerWallet) {
+      createNotificationByWallet(deal.buyerWallet, "AI arbitration complete", {
+        body: `Verdict: ${ticket.outcome}. View the resolution to execute.`,
+        type: "resolution",
+        dealId,
+      });
+    }
+    if (deal.sellerWallet) {
+      createNotificationByWallet(deal.sellerWallet, "AI arbitration complete", {
+        body: `Verdict: ${ticket.outcome}. View the resolution to execute.`,
+        type: "resolution",
+        dealId,
+      });
+    }
+
+    // 11. Return the ticket to client
     res.json({
       ticket,
       arbiter_pubkey,
@@ -555,6 +580,97 @@ router.get('/:id/resolution', async (req, res) => {
     console.error('Failed to fetch resolution:', error);
     res.status(500).json({ error: 'Failed to fetch resolution' });
   }
+});
+
+// ============================================================
+// Car escrow plan endpoint
+// ============================================================
+
+type DeliveryType = 'local_pickup' | 'same_city_carrier' | 'cross_country_carrier';
+
+interface CarSaleInput {
+  priceUsd: number;
+  deliveryType: DeliveryType;
+  hasTitleInHand: boolean;
+  odometerMiles: number;
+  year: number;
+  isSalvageTitle?: boolean;
+}
+
+function computeCarEscrowPlan(input: CarSaleInput) {
+  const reasons: string[] = [];
+  let score = 1;
+  const nowYear = new Date().getFullYear();
+  const ageYears = Math.max(0, nowYear - input.year);
+
+  if (input.priceUsd >= 20000) { score += 3; reasons.push('High-value vehicle (>= $20k)'); }
+  else if (input.priceUsd >= 10000) { score += 2; reasons.push('Mid-value vehicle (>= $10k)'); }
+
+  if (input.deliveryType === 'cross_country_carrier') { score += 3; reasons.push('Cross-country / remote delivery'); }
+  else if (input.deliveryType === 'same_city_carrier') { score += 2; reasons.push('Same-city carrier (no in-person hand-off)'); }
+  else { reasons.push('Local pickup (in-person)'); }
+
+  if (!input.hasTitleInHand) { score += 2; reasons.push('Seller does not have clear title in hand'); }
+  if (input.isSalvageTitle) { score += 2; reasons.push('Salvage / rebuilt title'); }
+  if (ageYears >= 15) { score += 1; reasons.push('Older vehicle (>= 15 years)'); }
+  if (input.odometerMiles >= 150_000) { score += 1; reasons.push('High mileage (>= 150k miles)'); }
+
+  score = Math.max(1, Math.min(score, 10));
+  const riskLevel: 'low' | 'medium' | 'high' = score <= 3 ? 'low' : score <= 6 ? 'medium' : 'high';
+
+  const now = Date.now();
+  let deliveryDeadlineHours = 24;
+  if (input.deliveryType === 'same_city_carrier') deliveryDeadlineHours = 72;
+  else if (input.deliveryType === 'cross_country_carrier') deliveryDeadlineHours = 7 * 24;
+
+  let disputeWindowHours = 48;
+  if (score >= 7) disputeWindowHours = 7 * 24;
+  else if (score >= 4) disputeWindowHours = 3 * 24;
+
+  const reminderMinutesBefore: number[] = [];
+  if (deliveryDeadlineHours >= 48) reminderMinutesBefore.push(24 * 60);
+  if (deliveryDeadlineHours >= 24) reminderMinutesBefore.push(6 * 60);
+  reminderMinutesBefore.push(60);
+
+  const deliveryDeadlineMs = now + deliveryDeadlineHours * 60 * 60 * 1000;
+  const disputeEndMs = deliveryDeadlineMs + disputeWindowHours * 60 * 60 * 1000;
+
+  return {
+    riskScore: score,
+    riskLevel,
+    reasons,
+    deliveryDeadlineHoursFromNow: deliveryDeadlineHours,
+    disputeWindowHours,
+    reminderMinutesBefore,
+    deliveryDeadlineAtIso: new Date(deliveryDeadlineMs).toISOString(),
+    disputeWindowEndsAtIso: new Date(disputeEndMs).toISOString(),
+  };
+}
+
+// POST /api/car-escrow/plan - Compute risk profile and deadlines for a car sale
+router.post('/car-escrow/plan', (req, res) => {
+  const body = req.body as Partial<CarSaleInput>;
+
+  if (
+    typeof body.priceUsd !== 'number' ||
+    typeof body.deliveryType !== 'string' ||
+    typeof body.hasTitleInHand !== 'boolean' ||
+    typeof body.odometerMiles !== 'number' ||
+    typeof body.year !== 'number'
+  ) {
+    return res.status(400).json({
+      error: 'Required: priceUsd (number), deliveryType (string), hasTitleInHand (boolean), odometerMiles (number), year (number)',
+    });
+  }
+
+  if (!['local_pickup', 'same_city_carrier', 'cross_country_carrier'].includes(body.deliveryType)) {
+    return res.status(400).json({
+      error: 'deliveryType must be: local_pickup | same_city_carrier | cross_country_carrier',
+    });
+  }
+
+  const plan = computeCarEscrowPlan(body as CarSaleInput);
+  return res.json({ ok: true, plan });
 });
 
 export default router;

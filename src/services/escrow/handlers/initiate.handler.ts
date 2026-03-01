@@ -280,6 +280,7 @@ export async function handleInitiate(
         title: input.title?.trim() || null,
         buyerEmail: input.buyerEmail?.trim() || null,
         sellerEmail: input.sellerEmail?.trim() || null,
+        metadata: input.metadata ? (input.metadata as Prisma.InputJsonValue) : Prisma.JsonNull,
       },
     });
   } else {
@@ -302,6 +303,7 @@ export async function handleInitiate(
         title: input.title?.trim() || null,
         buyerEmail: input.buyerEmail?.trim() || null,
         sellerEmail: input.sellerEmail?.trim() || null,
+        ...(input.metadata !== undefined && { metadata: input.metadata as Prisma.InputJsonValue }),
       },
     });
   }
