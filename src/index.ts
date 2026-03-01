@@ -14,6 +14,7 @@ import actionsRouter from "./routes/actions.route";
 import eventsRouter from "./routes/events.route";
 import dealsRouter from "./routes/deals.route";
 import aiRouter from "./routes/ai.route";
+import notificationsRouter from "./routes/notifications.route";
 
 const app = express();
 
@@ -34,6 +35,7 @@ app.use("/api/users", userRouter);
 app.use("/api/session", sessionRouter); // Mount session router
 app.use("/api/events", eventsRouter);
 app.use("/api/deals", dealsRouter);
+app.use("/api/notifications", notificationsRouter);
 app.use("/api/ai", aiRouter);
 app.use("/auth", authRouter);
 app.use("/actions", actionsRouter);

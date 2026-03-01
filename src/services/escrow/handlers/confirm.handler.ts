@@ -7,6 +7,7 @@ import { rpcManager } from "../../../config/solana";
 import { prisma } from "../../../lib/prisma";
 import { withRpcRetry } from "../../../utils/rpc-retry";
 import { resolveReqId } from "../utils";
+import { createNotificationByWallet } from "../../notification.service";
 
 export async function handleConfirm(
   input: ConfirmActionInput,
@@ -150,6 +151,41 @@ export async function handleConfirm(
     status: result.status,
     durationMs: Date.now() - startedAt,
   });
+
+  // Send notifications to counterparty (non-blocking)
+  const dealId = input.dealId;
+  const buyerWallet = result.buyerWallet;
+  const sellerWallet = result.sellerWallet;
+  if (input.action === "FUND" && sellerWallet) {
+    createNotificationByWallet(sellerWallet, "Deal funded", {
+      body: "The buyer has funded the escrow. Proceed with delivery.",
+      type: "deal",
+      dealId,
+    });
+  } else if (input.action === "RELEASE" && sellerWallet) {
+    createNotificationByWallet(sellerWallet, "Payment released", {
+      body: "The buyer has released the payment to you.",
+      type: "deal",
+      dealId,
+    });
+  } else if (input.action === "REFUND" && buyerWallet) {
+    createNotificationByWallet(buyerWallet, "Refund processed", {
+      body: "The seller has refunded your payment.",
+      type: "deal",
+      dealId,
+    });
+  } else if (input.action === "OPEN_DISPUTE") {
+    // Notify the other party
+    const counterpartyWallet =
+      input.actorWallet === buyerWallet ? sellerWallet : buyerWallet;
+    if (counterpartyWallet) {
+      createNotificationByWallet(counterpartyWallet, "Dispute opened", {
+        body: "The other party has opened a dispute. Submit your evidence.",
+        type: "dispute",
+        dealId,
+      });
+    }
+  }
 
   return {
     deal: result,

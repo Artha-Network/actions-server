@@ -79,11 +79,12 @@ model User {
   updatedAt       DateTime      @default(now()) @map("updated_at")
 
   // Relations
-  dealsAsSeller     Deal[]        @relation("SellerDeals")
-  dealsAsBuyer      Deal[]        @relation("BuyerDeals")
+  dealsAsSeller     Deal[]         @relation("SellerDeals")
+  dealsAsBuyer      Deal[]         @relation("BuyerDeals")
   submittedEvidence Evidence[]
-  attestations      Attestation[] @relation("UserAttestations")
+  attestations      Attestation[]  @relation("UserAttestations")
   sessions          Session[]
+  notifications     Notification[]
   // DB has a CHECK that either wallet_public_key or email_address is not null
 
   @@map("users")
@@ -114,6 +115,7 @@ model Deal {
   disputeDeadline  DateTime   @map("dispute_deadline")
   usdPriceSnapshot Json       @map("usd_price_snapshot") // {feed_id, price, conf, slot}
   feeBps           Int        @default(0) @map("fee_bps")
+  metadata         Json?      @map("metadata") // car details, custom fields
   createdAt        DateTime   @default(now()) @map("created_at")
   fundedAt         DateTime?  @map("funded_at")
   updatedAt        DateTime   @default(now()) @map("updated_at")
@@ -124,6 +126,7 @@ model Deal {
   attestations   Attestation[]
   priceSnapshots PriceSnapshot[]
   onchainEvents  OnchainEvent[]
+  notifications  Notification[]
 
   @@index([sellerId, createdAt(sort: Desc)], map: "deals_seller_created_idx")
   @@index([buyerId, createdAt(sort: Desc)], map: "deals_buyer_created_idx")
@@ -257,4 +260,23 @@ model Session {
   @@index([expiresAt], map: "sessions_expires_at_idx")
   @@index([lastSeen], map: "sessions_last_seen_idx")
   @@map("sessions")
+}
+
+model Notification {
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String   @map("user_id") @db.Uuid
+  title     String
+  body      String?
+  type      String   @default("info") // "info" | "deal" | "dispute" | "resolution"
+  dealId    String?  @map("deal_id") @db.Uuid
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deal Deal? @relation(fields: [dealId], references: [id], onDelete: SetNull)
+
+  @@index([userId, isRead], map: "notifications_user_read_idx")
+  @@index([userId, createdAt(sort: Desc)], map: "notifications_user_created_idx")
+  @@map("notifications")
 }
