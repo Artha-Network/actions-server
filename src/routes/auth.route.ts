@@ -6,7 +6,6 @@ import express, { Request, Response } from "express";
 import nacl from 'tweetnacl';
 import { PublicKey } from '@solana/web3.js';
 import { decode } from 'bs58';
-import { SolanaNetwork } from "@prisma/client";
 import { prisma } from '../lib/prisma';
 import { upsertWalletIdentity, WalletNetwork } from "../services/user.service";
 import { isBase58Address } from "../utils/validation";
@@ -109,20 +108,18 @@ router.post("/sign-in", async (req: Request, res: Response) => {
       return res.status(401).json({ error: 'Invalid signature' });
     }
 
-    // Get or create user
-    const walletAddress = pubkey;
+    // Get or create user — select only columns guaranteed to exist in DB
+    const userSelect = { id: true, walletPublicKey: true, displayName: true, emailAddress: true, reputationScore: true } as const;
+
     let user = await prisma.user.findUnique({
-      where: { walletAddress }
+      where: { walletPublicKey: pubkey },
+      select: userSelect,
     });
 
     if (!user) {
-      // Create new user
       user = await prisma.user.create({
-        data: {
-          walletAddress,
-          walletPublicKey: pubkey,
-          network: SolanaNetwork.DEVNET
-        }
+        data: { walletPublicKey: pubkey },
+        select: userSelect,
       });
     }
 
@@ -136,7 +133,7 @@ router.post("/sign-in", async (req: Request, res: Response) => {
       data: {
         sessionId,
         userId: user.id,
-        walletAddress: walletAddress,
+        walletAddress: pubkey,
         createdAt: now,
         lastSeen: now,
         expiresAt,
@@ -162,7 +159,7 @@ router.post("/sign-in", async (req: Request, res: Response) => {
       },
       user: {
         id: user.id,
-        walletAddress: user.walletAddress,
+        walletAddress: user.walletPublicKey,
         displayName: user.displayName,
         emailAddress: user.emailAddress
       }
@@ -188,7 +185,9 @@ router.get("/me", async (req: Request, res: Response) => {
   try {
     const session = await prisma.session.findUnique({
       where: { sessionId },
-      include: { user: true }
+      include: {
+        user: { select: { id: true, walletPublicKey: true, displayName: true, emailAddress: true, reputationScore: true } }
+      },
     });
 
     if (!session) {
@@ -229,7 +228,7 @@ router.get("/me", async (req: Request, res: Response) => {
       },
       user: {
         id: user.id,
-        walletAddress: user.walletAddress,
+        walletAddress: user.walletPublicKey,
         displayName: user.displayName,
         emailAddress: user.emailAddress,
         reputationScore: user.reputationScore.toString(),

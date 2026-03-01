@@ -45,8 +45,18 @@ router.post("/generate-contract", async (req, res) => {
         return res.status(200).json(data);
 
     } catch (error) {
-        console.error("AI Proxy Error:", error);
-        return res.status(500).json({ error: "Failed to generate contract" });
+        console.warn("[AI] Arbiter service unreachable or failed, returning fallback contract:", error instanceof Error ? error.message : error);
+        // Return a template contract so the UI can proceed even when arbiter is down
+        const d = req.body as Record<string, string>;
+        const today = new Date().toISOString().split("T")[0];
+        return res.status(200).json({
+            source: "fallback",
+            contract: `# ${d.title ?? "Escrow Agreement"}\n\n**Date:** ${today}\n\n## Parties\n- **Initiator (${d.role ?? "party"}):** Connected wallet\n- **Counterparty:** \`${d.counterparty ?? "Counterparty"}\`\n\n## Agreement\n\n${d.description ?? "As described by the initiating party."}\n\n## Financial Terms\n- **Amount:** ${d.amount ?? "0"} USDC\n- **Held in:** On-chain escrow (Solana)\n\n## Deadlines\n- **Delivery:** ${d.completionDeadline ?? d.deliveryDeadline ?? "As agreed"}\n- **Dispute window:** ${d.disputeDeadline ?? "7"} days after delivery\n\n## Dispute Resolution\nDisputes will be reviewed by the Artha AI arbiter. The arbiter's signed resolution ticket will govern fund release.\n\n---\n*Template contract — AI service is temporarily unavailable. Review all terms before proceeding.*`,
+            questions: [
+                "Is the description of work complete and unambiguous?",
+                "Have both parties agreed to the delivery deadline?",
+            ],
+        });
     }
 });
 
