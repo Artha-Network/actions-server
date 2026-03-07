@@ -19,6 +19,8 @@ export const InitiateActionSchema = z.object({
   title: z.string().max(100).optional(),
   buyerEmail: z.string().email().optional().or(z.literal("")),
   sellerEmail: z.string().email().optional().or(z.literal("")),
+  vin: z.string().max(17).optional(),
+  contract: z.string().optional(),
   clientDealId: z.string().uuid().optional(),
   payer: WalletSchema,
   metadata: z.record(z.unknown()).optional(),
@@ -36,14 +38,14 @@ export type FundActionInput = z.infer<typeof FundActionSchema>;
 
 export const ReleaseActionSchema = z.object({
   dealId: z.string().uuid(),
-  buyerWallet: WalletSchema,
+  sellerWallet: WalletSchema, // On-chain Release requires seller to sign (claim pattern)
 });
 
 export type ReleaseActionInput = z.infer<typeof ReleaseActionSchema>;
 
 export const RefundActionSchema = z.object({
   dealId: z.string().uuid(),
-  sellerWallet: WalletSchema,
+  buyerWallet: WalletSchema, // On-chain Refund requires buyer to sign (claim pattern)
 });
 
 export type RefundActionInput = z.infer<typeof RefundActionSchema>;
@@ -81,4 +83,5 @@ export type ActionResponse = {
   latestBlockhash?: string;
   lastValidBlockHeight?: number;
   feePayer?: string;
+  emailSent?: boolean;
 };

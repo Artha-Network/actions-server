@@ -60,6 +60,13 @@ enum SolanaNetwork {
   @@map("solana_network")
 }
 
+enum TitleStatus {
+  PENDING
+  TRANSFERRED
+
+  @@map("title_status")
+}
+
 /////////////////////////
 // Models (tables)
 /////////////////////////
@@ -105,6 +112,7 @@ model Deal {
   arbiterPubkey    String     @map("arbiter_pubkey")
   onchainAddress   String     @map("onchain_address")
   title            String?    @map("title")
+  description      String?    @map("description") @db.Text
   buyerEmail       String?    @map("buyer_email")
   sellerEmail      String?    @map("seller_email")
   priceUsd         Decimal    @map("price_usd") @db.Decimal(12, 2)
@@ -114,6 +122,8 @@ model Deal {
   deliverDeadline  DateTime   @map("deliver_deadline")
   disputeDeadline  DateTime   @map("dispute_deadline")
   usdPriceSnapshot Json       @map("usd_price_snapshot") // {feed_id, price, conf, slot}
+  vin              String?    @map("vin")
+  contract         String?    @map("contract") @db.Text
   feeBps           Int        @default(0) @map("fee_bps")
   metadata         Json?      @map("metadata") // car details, custom fields
   createdAt        DateTime   @default(now()) @map("created_at")
@@ -260,6 +270,18 @@ model Session {
   @@index([expiresAt], map: "sessions_expires_at_idx")
   @@index([lastSeen], map: "sessions_last_seen_idx")
   @@map("sessions")
+}
+
+model VehicleTitle {
+  id                 String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  vin                String      @unique
+  currentOwnerWallet String      @map("current_owner_wallet")
+  titleStatus        TitleStatus @default(PENDING) @map("title_status")
+  transferDate       DateTime?   @map("transfer_date")
+  createdAt          DateTime    @default(now()) @map("created_at")
+  updatedAt          DateTime    @default(now()) @map("updated_at")
+
+  @@map("vehicle_titles")
 }
 
 model Notification {

@@ -31,18 +31,8 @@ export function dealIdToBigInt(dealId: string): bigint {
   return BigInt(`0x${dealId.replace(/-/g, "")}`);
 }
 
-function toPublicKey(value: string | PublicKey): PublicKey {
-  return value instanceof PublicKey ? value : new PublicKey(value);
-}
-
 interface EscrowSeedsInput {
   dealId: string; // UUID string - required for PDA seeds
-}
-
-/** Seeds scheme: "deal_id" (default) = [escrow, deal_id]; "parties" = [escrow, seller, buyer, mint] (legacy) */
-export function getEscrowPdaSeedsScheme(): "deal_id" | "parties" {
-  const v = process.env.ESCROW_PDA_SEEDS?.toLowerCase();
-  return v === "parties" ? "parties" : "deal_id";
 }
 
 /**
@@ -59,7 +49,7 @@ export function getEscrowPdaFromBytes(dealIdBytes: Buffer) {
 }
 
 /**
- * Derives the EscrowState PDA using only deal_id (current program):
+ * Derives the EscrowState PDA using deal_id (matches on-chain program lib.rs):
  * PDA seeds: ["escrow", deal_id_bytes]
  */
 export function getEscrowPda({ dealId }: EscrowSeedsInput) {
@@ -67,24 +57,3 @@ export function getEscrowPda({ dealId }: EscrowSeedsInput) {
   return getEscrowPdaFromBytes(dealIdBytes);
 }
 
-/**
- * Derives the EscrowState PDA using seller, buyer, mint (legacy program / initiate_handler.rs):
- * PDA seeds: ["escrow", seller, buyer, mint]
- */
-export function getEscrowPdaWithParties(
-  sellerWallet: string | PublicKey,
-  buyerWallet: string | PublicKey,
-  mint: string | PublicKey
-) {
-  const seller = toPublicKey(sellerWallet);
-  const buyer = toPublicKey(buyerWallet);
-  const mintKey = toPublicKey(mint);
-  const seeds = [
-    Buffer.from("escrow"),
-    seller.toBuffer(),
-    buyer.toBuffer(),
-    mintKey.toBuffer(),
-  ];
-  const [publicKey, bump] = PublicKey.findProgramAddressSync(seeds, solanaConfig.programId);
-  return { publicKey, bump };
-}

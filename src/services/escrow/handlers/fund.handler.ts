@@ -1,12 +1,11 @@
 import { DealStatus } from "@prisma/client";
 import { PublicKey, TransactionInstruction } from "@solana/web3.js";
-import { createTransferCheckedInstruction, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import type { FundActionInput, ActionResponse } from "../../../types/actions";
 import { solanaConfig } from "../../../config/solana";
-import { parseAmountToUnits } from "../../../utils/amount";
-import { buildIdempotentCreateAtaIx } from "../../../solana/token";
+import { buildIdempotentCreateAtaIx, deriveAta } from "../../../solana/token";
 import { buildVersionedTransaction } from "../../../solana/transaction";
-import { dealIdToBytes, getEscrowPda, getEscrowPdaWithParties, getEscrowPdaSeedsScheme } from "../../../utils/deal";
+import { dealIdToBytes, getEscrowPda } from "../../../utils/deal";
 import { logAction } from "../../../utils/logger";
 import { rpcManager } from "../../../config/solana";
 import { withRpcRetry } from "../../../utils/rpc-retry";
@@ -40,28 +39,12 @@ export async function handleFund(
   }
 
   const buyerPubkey = new PublicKey(input.buyerWallet);
-  const amountUnits = parseAmountToUnits(input.amount);
-  
+
   const actualDealId = deal.id;
-  const pdaScheme = getEscrowPdaSeedsScheme();
-  const { publicKey: escrowPda, bump } =
-    pdaScheme === "parties" && deal.sellerWallet && deal.buyerWallet && deal.depositTokenMint
-      ? getEscrowPdaWithParties(deal.sellerWallet, deal.buyerWallet, deal.depositTokenMint)
-      : getEscrowPda({ dealId: actualDealId });
+  const { publicKey: escrowPda } = getEscrowPda({ dealId: actualDealId });
 
   const dealIdBytes = dealIdToBytes(actualDealId);
-  if (pdaScheme === "deal_id") {
-    const [verifiedPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("escrow"), dealIdBytes],
-      solanaConfig.programId
-    );
-    if (escrowPda.toBase58() !== verifiedPda.toBase58()) {
-      throw new Error(
-        `PDA derivation mismatch: derived ${escrowPda.toBase58()} but verified ${verifiedPda.toBase58()}`
-      );
-    }
-  }
-  
+
   let escrowAccountInfo = null;
   try {
     escrowAccountInfo = await withRpcRetry(
@@ -75,62 +58,48 @@ export async function handleFund(
       `Escrow PDA: ${escrowPda.toBase58()}`
     );
   }
-  
+
   if (!escrowAccountInfo) {
     throw new Error(
       `Escrow account does not exist on-chain. The deal must be initiated first before funding. ` +
       `Escrow PDA: ${escrowPda.toBase58()}`
     );
   }
-  
-  console.log("[fund] ✅ PDA verified:", escrowPda.toBase58());
-  console.log("[fund] ✅ Account exists on-chain");
-  console.log("[fund] ======================");
+
   const payerKey = derivePayer(buyerPubkey);
 
-  const buyerAtaInfo = buildIdempotentCreateAtaIx(payerKey, buyerPubkey, solanaConfig.usdcMint);
-  const vaultAtaInfo = buildIdempotentCreateAtaIx(payerKey, escrowPda, solanaConfig.usdcMint, true);
-
-  const transferIx = createTransferCheckedInstruction(
-    buyerAtaInfo.ata,
-    solanaConfig.usdcMint,
-    vaultAtaInfo.ata,
-    buyerPubkey,
-    amountUnits,
-    solanaConfig.usdcDecimals
+  // Derive vault authority PDA and vault ATA (must match what initiate created)
+  const [vaultAuthority] = PublicKey.findProgramAddressSync(
+    [Buffer.from("vault"), escrowPda.toBuffer()],
+    solanaConfig.programId
   );
+  const vaultAta = deriveAta(solanaConfig.usdcMint, vaultAuthority, true);
 
-  console.log("=== Fund Instruction Data Debug ===");
-  console.log("Input Deal ID:", input.dealId);
-  console.log("Actual Deal ID (from DB):", actualDealId);
-  console.log("Deal ID bytes (hex):", dealIdBytes.toString("hex"));
-  console.log("Deal ID bytes length:", dealIdBytes.length);
-  console.log("Escrow PDA (derived with this deal_id):", escrowPda.toBase58());
-  console.log("===================================");
-  
+  // Ensure buyer ATA exists (idempotent)
+  const buyerAtaInfo = buildIdempotentCreateAtaIx(payerKey, buyerPubkey, solanaConfig.usdcMint);
+
+  // Build on-chain fund instruction (the program does the CPI transfer internally)
   const data = Buffer.concat([
     FUND_DISCRIMINATOR,
     dealIdBytes,
   ]);
-  
-  console.log("Fund instruction data length:", data.length);
-  console.log("  Discriminator (8 bytes):", data.slice(0, 8).toString("hex"));
-  console.log("  Deal ID (16 bytes):", data.slice(8, 24).toString("hex"));
-  
+
   const programIx = new TransactionInstruction({
     programId: solanaConfig.programId,
     keys: [
       { pubkey: buyerPubkey, isSigner: true, isWritable: true },
       { pubkey: escrowPda, isSigner: false, isWritable: true },
       { pubkey: buyerAtaInfo.ata, isSigner: false, isWritable: true },
-      { pubkey: vaultAtaInfo.ata, isSigner: false, isWritable: true },
+      { pubkey: vaultAta, isSigner: false, isWritable: true },
       { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     ],
     data,
   });
 
+  // Only send buyer ATA creation (idempotent) + the program fund instruction.
+  // No separate transferChecked — the on-chain fund handler does the CPI transfer.
   const txResult = await buildVersionedTransaction(
-    [buyerAtaInfo.instruction, vaultAtaInfo.instruction, transferIx, programIx],
+    [buyerAtaInfo.instruction, programIx],
     payerKey
   );
 
@@ -152,4 +121,3 @@ export async function handleFund(
     feePayer: payerKey.toBase58(),
   };
 }
-

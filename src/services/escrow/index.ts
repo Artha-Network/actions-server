@@ -12,7 +12,6 @@ export {
 // Export utilities
 export {
   resolveReqId,
-  secondsFromUnix,
   ensureDeadline,
   derivePayer,
   fetchDealSummary,

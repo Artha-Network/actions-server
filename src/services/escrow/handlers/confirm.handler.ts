@@ -1,4 +1,4 @@
-import { DealStatus } from "@prisma/client";
+import { AttestationKind, DealStatus } from "@prisma/client";
 import type { ConfirmActionInput } from "../../../types/actions";
 import { solanaConfig } from "../../../config/solana";
 import { logAction } from "../../../utils/logger";
@@ -7,6 +7,7 @@ import { rpcManager } from "../../../config/solana";
 import { prisma } from "../../../lib/prisma";
 import { withRpcRetry } from "../../../utils/rpc-retry";
 import { resolveReqId } from "../utils";
+import { sendDealCompletionNotification } from "../../email.service";
 import { createNotificationByWallet } from "../../notification.service";
 
 export async function handleConfirm(
@@ -20,8 +21,11 @@ export async function handleConfirm(
     throw new Error("Invalid actor wallet");
   }
 
-  // Check if this is a mock signature (development mode - skipping blockchain transaction)
+  // Mock signatures are only allowed in non-production environments
   const isMockSignature = input.txSig.startsWith("11111111111111111111111111111111");
+  if (isMockSignature && process.env.NODE_ENV === "production") {
+    throw new Error("Mock signatures are not allowed in production");
+  }
 
   let slot = 0;
   if (!isMockSignature) {
@@ -92,20 +96,9 @@ export async function handleConfirm(
         if (deal.status !== DealStatus.DISPUTED && deal.status !== DealStatus.FUNDED) {
           throw new Error("Invalid transition: can only resolve DISPUTED or FUNDED deals");
         }
-        // Fetch ticket to determine if verdict is RELEASE or REFUND
-        const ticket = await tx.resolveTicket.findFirst({
-          where: { dealId: deal.id },
-          orderBy: { issuedAt: "desc" },
-        });
-        if (!ticket) throw new Error("No resolution ticket found");
-        // Set final status based on verdict
-        if (ticket.finalAction === "RELEASE") {
-          nextStatus = DealStatus.RELEASED;
-        } else if (ticket.finalAction === "REFUND") {
-          nextStatus = DealStatus.REFUNDED;
-        } else {
-          throw new Error(`Unsupported verdict: ${ticket.finalAction}`);
-        }
+        // RESOLVE only records the arbiter's verdict on-chain — funds don't move yet.
+        // The actual transfer happens when seller signs RELEASE (or buyer signs REFUND).
+        nextStatus = DealStatus.RESOLVED;
         break;
       case "INITIATE":
       default:
@@ -135,11 +128,36 @@ export async function handleConfirm(
         status: true,
         buyerWallet: true,
         sellerWallet: true,
+        buyerId: true,
+        sellerId: true,
         updatedAt: true,
         fundedAt: true,
+        title: true,
+        priceUsd: true,
+        buyerEmail: true,
+        sellerEmail: true,
       },
     });
   });
+
+  // Fire-and-forget reputation update — does not block the response
+  if (result.status === DealStatus.RELEASED && result.sellerId && result.buyerId) {
+    updateReputationReleased(input.dealId, result.sellerId, result.buyerId).catch(console.error);
+  } else if (result.status === DealStatus.REFUNDED && result.sellerId) {
+    updateReputationRefunded(input.dealId, result.sellerId).catch(console.error);
+  }
+
+  // Fire-and-forget completion email to both parties
+  if (result.status === DealStatus.RELEASED || result.status === DealStatus.REFUNDED) {
+    sendDealCompletionNotification({
+      dealId: input.dealId,
+      dealTitle: result.title,
+      amountUsd: result.priceUsd.toString(),
+      buyerEmail: result.buyerEmail,
+      sellerEmail: result.sellerEmail,
+      outcome: result.status as "RELEASED" | "REFUNDED",
+    }).catch(console.error);
+  }
 
   logAction({
     reqId,
@@ -190,5 +208,24 @@ export async function handleConfirm(
   return {
     deal: result,
   };
+}
+
+async function updateReputationReleased(dealId: string, sellerId: string, buyerId: string): Promise<void> {
+  await prisma.attestation.createMany({
+    data: [
+      { dealId, subjectUserId: sellerId, kind: AttestationKind.DEAL_SUCCESS, scoreDelta: 5 },
+      { dealId, subjectUserId: buyerId, kind: AttestationKind.BUYER_GOOD, scoreDelta: 2 },
+    ],
+    skipDuplicates: true,
+  });
+  await prisma.user.update({ where: { id: sellerId }, data: { reputationScore: { increment: 5 } } });
+  await prisma.user.update({ where: { id: buyerId }, data: { reputationScore: { increment: 2 } } });
+}
+
+async function updateReputationRefunded(dealId: string, sellerId: string): Promise<void> {
+  await prisma.attestation.create({
+    data: { dealId, subjectUserId: sellerId, kind: AttestationKind.DEAL_DEFAULT, scoreDelta: -5 },
+  });
+  await prisma.user.update({ where: { id: sellerId }, data: { reputationScore: { decrement: 5 } } });
 }
 

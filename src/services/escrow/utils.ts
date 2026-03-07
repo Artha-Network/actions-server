@@ -45,6 +45,8 @@ export async function fetchDealSummary(id: string): Promise<DealSummary | null> 
       createdAt: true,
       updatedAt: true,
       fundedAt: true,
+      vin: true,
+      contract: true,
     },
   });
 }

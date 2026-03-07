@@ -179,15 +179,9 @@ router.post("/verify-signature", async (req, res) => {
       return res.status(401).json({ error: "Invalid signature" });
     }
 
-    console.log("[verify-signature] Signature verified for wallet:", wallet);
-    console.log("[verify-signature] Deal ID:", dealId);
-
     // Wait 2-4 seconds as requested
     const waitTime = 2000 + Math.random() * 2000; // 2-4 seconds
-    console.log("[verify-signature] Waiting", Math.round(waitTime), "ms before continuing...");
     await new Promise(resolve => setTimeout(resolve, waitTime));
-
-    console.log("[verify-signature] Signature verified. Continuing...");
 
     return res.status(200).json({
       success: true,

@@ -60,7 +60,4 @@ export class RpcEndpointManager {
         return this.endpoints.slice().sort((a, b) => a.failures - b.failures)[0].url;
     }
 
-    getAllEndpoints() {
-        return this.endpoints.map((e) => e.url);
-    }
 }

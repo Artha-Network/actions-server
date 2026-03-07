@@ -23,8 +23,6 @@ router.post("/generate-contract", async (req, res) => {
             return res.status(400).json({ error: parsed.error.message });
         }
 
-        console.log("[AI] Forwarding contract generation request with deal details:", JSON.stringify(parsed.data, null, 2));
-
         // Call Arbiter Service
         // Assuming Arbiter Service is running on localhost:3001
         const ARBITER_URL = process.env.ARBITER_SERVICE_URL || "http://localhost:3001";
@@ -35,10 +33,12 @@ router.post("/generate-contract", async (req, res) => {
             method: "POST",
             headers,
             body: JSON.stringify(parsed.data),
+            signal: AbortSignal.timeout(60_000),
         });
 
         if (!response.ok) {
-            throw new Error(`Arbiter service error: ${response.statusText}`);
+            const errText = await response.text().catch(() => response.statusText);
+            throw new Error(`Arbiter service error: ${errText}`);
         }
 
         const data = await response.json();

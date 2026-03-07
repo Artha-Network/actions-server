@@ -12,7 +12,7 @@ import { DealStatus } from "@prisma/client";
 import { PublicKey, TransactionInstruction, Keypair } from "@solana/web3.js";
 import { solanaConfig } from "../config/solana";
 import { buildVersionedTransaction, buildSignAndSendTransaction } from "../solana/transaction";
-import { getEscrowPda, getEscrowPdaSeedsScheme, getEscrowPdaWithParties } from "../utils/deal";
+import { getEscrowPda } from "../utils/deal";
 import { logAction } from "../utils/logger";
 import { prisma } from "../lib/prisma";
 import { handleInitiate } from "./escrow/handlers/initiate.handler";
@@ -59,13 +59,8 @@ export class EscrowService {
 
     const callerPubkey = new PublicKey(input.callerWallet);
 
-    // Get escrow PDA (same scheme as initiate: deal_id or parties)
     const actualDealId = deal.id;
-    const pdaScheme = getEscrowPdaSeedsScheme();
-    const { publicKey: escrowPda } =
-      pdaScheme === "parties" && deal.sellerWallet && deal.buyerWallet && deal.depositTokenMint
-        ? getEscrowPdaWithParties(deal.sellerWallet, deal.buyerWallet, deal.depositTokenMint)
-        : getEscrowPda({ dealId: actualDealId });
+    const { publicKey: escrowPda } = getEscrowPda({ dealId: actualDealId });
 
     // OpenDispute instruction only needs discriminator (no additional data)
     const data = OPEN_DISPUTE_DISCRIMINATOR;
@@ -145,11 +140,7 @@ export class EscrowService {
       verdictU8 = ticket.finalAction === "RELEASE" ? 1 : 2;
     }
 
-    const pdaScheme = getEscrowPdaSeedsScheme();
-    const { publicKey: escrowPda } =
-      pdaScheme === "parties" && deal.sellerWallet && deal.buyerWallet && deal.depositTokenMint
-        ? getEscrowPdaWithParties(deal.sellerWallet, deal.buyerWallet, deal.depositTokenMint)
-        : getEscrowPda({ dealId: deal.id });
+    const { publicKey: escrowPda } = getEscrowPda({ dealId: deal.id });
 
     const data = Buffer.concat([RESOLVE_DISCRIMINATOR, Buffer.from([verdictU8])]);
     const programIx = new TransactionInstruction({

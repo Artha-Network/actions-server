@@ -5,7 +5,7 @@ import type { RefundActionInput, ActionResponse } from "../../../types/actions";
 import { solanaConfig } from "../../../config/solana";
 import { deriveAta } from "../../../solana/token";
 import { buildVersionedTransaction } from "../../../solana/transaction";
-import { dealIdToBytes, getEscrowPda, getEscrowPdaWithParties, getEscrowPdaSeedsScheme } from "../../../utils/deal";
+import { dealIdToBytes, getEscrowPda } from "../../../utils/deal";
 import { logAction } from "../../../utils/logger";
 import { REFUND_DISCRIMINATOR } from "../constants";
 import { resolveReqId, derivePayer, fetchDealSummary } from "../utils";
@@ -24,8 +24,8 @@ export async function handleRefund(
     throw new Error(`Deal status ${deal.status} cannot be refunded`);
   }
 
-  if (deal.sellerWallet !== input.sellerWallet) {
-    throw new Error("Caller wallet does not match seller");
+  if (deal.buyerWallet !== input.buyerWallet) {
+    throw new Error("Caller wallet does not match buyer");
   }
 
   if (!deal.sellerWallet || !deal.buyerWallet) {
@@ -36,14 +36,10 @@ export async function handleRefund(
     throw new Error("Deal is missing deposit token mint");
   }
 
-  const buyerPubkey = new PublicKey(deal.buyerWallet);
-  
+  const buyerPubkey = new PublicKey(input.buyerWallet);
+
   const actualDealId = deal.id;
-  const pdaScheme = getEscrowPdaSeedsScheme();
-  const { publicKey: escrowPda } =
-    pdaScheme === "parties" && deal.sellerWallet && deal.buyerWallet && deal.depositTokenMint
-      ? getEscrowPdaWithParties(deal.sellerWallet, deal.buyerWallet, deal.depositTokenMint)
-      : getEscrowPda({ dealId: actualDealId });
+  const { publicKey: escrowPda } = getEscrowPda({ dealId: actualDealId });
 
   const [vaultAuthority] = PublicKey.findProgramAddressSync(
     [Buffer.from("vault"), escrowPda.toBuffer()],

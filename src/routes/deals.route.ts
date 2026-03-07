@@ -1,7 +1,11 @@
 import { Router } from 'express';
+import multer from 'multer';
 import { createUserIfMissing } from '../services/user.service';
 import { prisma } from '../lib/prisma';
+import { supabaseAdmin } from '../lib/supabaseAdmin';
 import { createNotificationByWallet } from '../services/notification.service';
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const router = Router();
 
@@ -46,8 +50,9 @@ router.get('/', async (req, res) => {
       select: {
         id: true,
         title: true,
-        buyerEmail: true, // This field exists in schema
-        sellerEmail: true, // This field exists in schema
+        description: true,
+        buyerEmail: true,
+        sellerEmail: true,
         status: true,
         priceUsd: true,
         buyerWallet: true,
@@ -65,6 +70,7 @@ router.get('/', async (req, res) => {
     const mappedDeals = deals.map(deal => ({
       id: deal.id,
       title: deal.title,
+      description: deal.description,
       buyer_email: deal.buyerEmail,
       seller_email: deal.sellerEmail,
       status: deal.status,
@@ -88,7 +94,88 @@ router.get('/', async (req, res) => {
   }
 });
 
-// GET /api/deals/:id - Get specific deal
+// ============================================================
+// Human Arbiter access (must be before /:id to avoid route collision)
+// ============================================================
+
+const HUMAN_ARBITER_WALLET = 'J5VHnSRxVizNgT6xCmoBNnXPU7EDfYJ9xvRjYTK5Xppo';
+
+// GET /api/deals/arbiter/disputed - List all disputed deals (human arbiter only)
+router.get('/arbiter/disputed', async (req, res) => {
+  try {
+    const { wallet_address } = req.query;
+
+    if (wallet_address !== HUMAN_ARBITER_WALLET) {
+      return res.status(403).json({ error: 'Unauthorized — only the human arbiter can access this endpoint' });
+    }
+
+    const deals = await prisma.deal.findMany({
+      where: { status: { in: ['DISPUTED', 'RESOLVED'] } },
+      include: {
+        buyer: { select: { walletAddress: true, displayName: true, emailAddress: true } },
+        seller: { select: { walletAddress: true, displayName: true, emailAddress: true } },
+        evidence: {
+          include: { submittedBy: { select: { walletAddress: true, displayName: true } } },
+          orderBy: { submittedAt: 'asc' },
+        },
+        onchainEvents: { orderBy: { createdAt: 'desc' } },
+        tickets: { orderBy: { issuedAt: 'desc' }, take: 1 },
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
+
+    const mapped = deals.map(deal => {
+      const latestTicket = deal.tickets[0] ?? null;
+      return {
+        id: deal.id,
+        title: deal.title,
+        description: deal.description,
+        contract: deal.contract,
+        status: deal.status,
+        price_usd: deal.priceUsd.toString(),
+        buyer_wallet: deal.buyerWallet,
+        seller_wallet: deal.sellerWallet,
+        buyer_email: deal.buyerEmail,
+        seller_email: deal.sellerEmail,
+        vin: deal.vin,
+        deliver_deadline: deal.deliverDeadline?.toISOString(),
+        dispute_deadline: deal.disputeDeadline?.toISOString(),
+        created_at: deal.createdAt.toISOString(),
+        updated_at: deal.updatedAt.toISOString(),
+        buyer: deal.buyer ? { display_name: deal.buyer.displayName, email: deal.buyer.emailAddress } : null,
+        seller_profile: deal.seller ? { display_name: deal.seller.displayName, email: deal.seller.emailAddress } : null,
+        evidence: deal.evidence.map(e => ({
+          id: e.id,
+          description: e.cid,
+          mime_type: e.mimeType,
+          submitted_by: e.submittedBy.walletAddress,
+          submitted_by_name: e.submittedBy.displayName,
+          submitted_at: e.submittedAt.toISOString(),
+          role: e.submittedBy.walletAddress === deal.buyerWallet ? 'buyer' : 'seller',
+        })),
+        ai_resolution: latestTicket ? {
+          outcome: latestTicket.finalAction,
+          confidence: Number(latestTicket.confidence),
+          rationale: latestTicket.rationaleCid,
+          issued_at: latestTicket.issuedAt?.toISOString(),
+        } : null,
+        onchain_events: deal.onchainEvents.map(e => ({
+          id: e.id,
+          tx_sig: e.txSig,
+          instruction: e.instruction,
+          created_at: e.createdAt.toISOString(),
+        })),
+      };
+    });
+
+    res.json({ deals: mapped, total: mapped.length });
+  } catch (error) {
+    console.error('Failed to fetch arbiter deals:', error);
+    res.status(500).json({ error: 'Failed to fetch arbiter deals' });
+  }
+});
+
+// GET /api/deals/:id - Get specific deal (mapped to snake_case)
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -96,8 +183,9 @@ router.get('/:id', async (req, res) => {
     const deal = await prisma.deal.findUnique({
       where: { id },
       include: {
-        buyer: true,
-        seller: true
+        buyer: { select: { walletAddress: true, displayName: true, reputationScore: true } },
+        seller: { select: { walletAddress: true, displayName: true, reputationScore: true } },
+        onchainEvents: { orderBy: { createdAt: 'desc' } },
       }
     });
 
@@ -105,7 +193,41 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ error: 'Deal not found' });
     }
 
-    res.json(deal);
+    res.json({
+      id: deal.id,
+      title: deal.title,
+      description: deal.description,
+      status: deal.status,
+      price_usd: deal.priceUsd.toString(),
+      buyer_wallet: deal.buyerWallet,
+      seller_wallet: deal.sellerWallet,
+      buyer_email: deal.buyerEmail,
+      seller_email: deal.sellerEmail,
+      vin: deal.vin,
+      contract: deal.contract || null,
+      deliver_deadline: deal.deliverDeadline?.toISOString() || null,
+      dispute_deadline: deal.disputeDeadline?.toISOString() || null,
+      funded_at: deal.fundedAt?.toISOString() || null,
+      created_at: deal.createdAt.toISOString(),
+      updated_at: deal.updatedAt.toISOString(),
+      fee_bps: deal.feeBps,
+      onchain_address: deal.onchainAddress,
+      buyer: deal.buyer ? {
+        display_name: deal.buyer.displayName,
+        reputation_score: Number(deal.buyer.reputationScore),
+      } : null,
+      seller: deal.seller ? {
+        display_name: deal.seller.displayName,
+        reputation_score: Number(deal.seller.reputationScore),
+      } : null,
+      onchain_events: deal.onchainEvents.map(e => ({
+        id: e.id,
+        tx_sig: e.txSig,
+        slot: e.slot.toString(),
+        instruction: e.instruction,
+        created_at: e.createdAt.toISOString(),
+      })),
+    });
   } catch (error) {
     console.error('Failed to fetch deal:', error);
     res.status(500).json({ error: 'Failed to fetch deal' });
@@ -158,7 +280,10 @@ router.get('/events/recent', async (req, res) => {
         deal: {
           select: {
             buyerWallet: true,
-            sellerWallet: true
+            sellerWallet: true,
+            title: true,
+            status: true,
+            priceUsd: true,
           }
         }
       },
@@ -224,8 +349,7 @@ router.post('/:id/evidence', async (req, res) => {
       return res.status(404).json({ error: 'User not found. Please set up your profile first.' });
     }
 
-    // Store description as CID placeholder (text evidence stored directly)
-    // In future sprints, file evidence will use Arweave/IPFS and store actual CIDs
+    // Store text evidence directly as cid field; file evidence uses the /evidence/upload endpoint
     const mimeType = type || 'text/plain';
 
     const evidence = await prisma.evidence.create({
@@ -258,6 +382,69 @@ router.post('/:id/evidence', async (req, res) => {
   } catch (error) {
     console.error('Failed to submit evidence:', error);
     res.status(500).json({ error: 'Failed to submit evidence' });
+  }
+});
+
+// POST /api/deals/:id/evidence/upload - Upload a file as evidence to Supabase Storage
+router.post('/:id/evidence/upload', upload.single('file'), async (req, res) => {
+  try {
+    const { id: dealId } = req.params;
+    const { wallet_address } = req.query;
+    const file = req.file;
+
+    if (!wallet_address || typeof wallet_address !== 'string') {
+      return res.status(400).json({ error: 'wallet_address is required' });
+    }
+    if (!file) {
+      return res.status(400).json({ error: 'file is required' });
+    }
+
+    const deal = await prisma.deal.findUnique({
+      where: { id: dealId },
+      select: { id: true, status: true, buyerWallet: true, sellerWallet: true },
+    });
+    if (!deal) return res.status(404).json({ error: 'Deal not found' });
+    if (deal.status !== 'DISPUTED') {
+      return res.status(400).json({ error: `Cannot upload evidence: deal is in ${deal.status} status (must be DISPUTED)` });
+    }
+    if (deal.buyerWallet !== wallet_address && deal.sellerWallet !== wallet_address) {
+      return res.status(403).json({ error: 'Only the buyer or seller of this deal can submit evidence' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { walletAddress: wallet_address },
+      select: { id: true },
+    });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const storagePath = `${dealId}/${Date.now()}_${file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    const { error: uploadError } = await supabaseAdmin.storage
+      .from('evidence-files')
+      .upload(storagePath, file.buffer, { contentType: file.mimetype, upsert: false });
+
+    if (uploadError) {
+      console.error('Supabase Storage upload error:', uploadError);
+      return res.status(500).json({ error: 'File upload failed', details: uploadError.message });
+    }
+
+    const evidence = await prisma.evidence.create({
+      data: {
+        dealId,
+        submittedById: user.id,
+        cid: storagePath,
+        mimeType: file.mimetype,
+      },
+    });
+
+    return res.status(201).json({
+      id: evidence.id,
+      path: storagePath,
+      file_name: file.originalname,
+      mime_type: file.mimetype,
+    });
+  } catch (error) {
+    console.error('Failed to upload evidence file:', error);
+    res.status(500).json({ error: 'Failed to upload evidence file' });
   }
 });
 

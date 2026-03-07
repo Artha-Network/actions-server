@@ -20,7 +20,6 @@ router.post('/', async (req, res) => {
     // For now, just return success without storing to avoid API key issues
     // TODO: Set up proper Supabase service role key or create frontend_events table in Prisma
     
-    console.log('📊 Event tracked:', req.body);
     res.json({ success: true, stored: false });
   } catch (error) {
     console.error('Event tracking error:', error);

@@ -115,14 +115,30 @@ async function start() {
 		process.exit(1);
 	}
 
-	app.listen(port, () => {
+	const server = app.listen(port, () => {
 		// eslint-disable-next-line no-console
 		console.log(`[actions-server] listening on http://localhost:${port}`);
-		// eslint-disable-next-line no-console
-		console.log(`[actions-server] RPC URL: ${process.env.SOLANA_RPC_URL}`);
 	});
+
+	// Graceful shutdown
+	const shutdown = async (signal: string) => {
+		// eslint-disable-next-line no-console
+		console.log(`[actions-server] ${signal} received, shutting down gracefully...`);
+		server.close(async () => {
+			await prisma.$disconnect();
+			// eslint-disable-next-line no-console
+			console.log("[actions-server] Shutdown complete.");
+			process.exit(0);
+		});
+		// Force exit after 10s if graceful shutdown stalls
+		setTimeout(() => {
+			console.error("[actions-server] Forced shutdown after timeout.");
+			process.exit(1);
+		}, 10_000);
+	};
+
+	process.on("SIGTERM", () => shutdown("SIGTERM"));
+	process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
 start();
-
-

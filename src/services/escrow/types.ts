@@ -19,6 +19,8 @@ export interface DealSummary {
   createdAt: Date;
   updatedAt: Date;
   fundedAt: Date | null;
+  vin: string | null;
+  contract: string | null;
 }
 
 

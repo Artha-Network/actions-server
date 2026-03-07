@@ -197,17 +197,17 @@ router.get("/me", async (req: Request, res: Response) => {
 
     // Check if session is active
     if (!isSessionActive(session)) {
-      // Delete expired/inactive session
-      await prisma.session.delete({ where: { id: session.id } });
+      // Delete expired/inactive session (ignore if already gone)
+      await prisma.session.delete({ where: { id: session.id } }).catch(() => {});
       res.clearCookie('artha_session');
       return res.status(401).json({ error: 'Session expired or inactive' });
     }
 
-    // Update last_seen
+    // Update last_seen (ignore if session was deleted between find and update)
     await prisma.session.update({
       where: { id: session.id },
       data: { lastSeen: new Date() }
-    });
+    }).catch(() => {});
 
     const user = session.user;
     if (!user) {
@@ -267,16 +267,16 @@ router.post("/keepalive", async (req: Request, res: Response) => {
 
     // Check if session is still valid
     if (!isSessionActive(session)) {
-      await prisma.session.delete({ where: { id: session.id } });
+      await prisma.session.delete({ where: { id: session.id } }).catch(() => {});
       res.clearCookie('artha_session');
       return res.status(401).json({ error: 'Session expired or inactive' });
     }
 
-    // Update last_seen
+    // Update last_seen (ignore if session was deleted concurrently)
     await prisma.session.update({
       where: { id: session.id },
       data: { lastSeen: new Date() }
-    });
+    }).catch(() => {});
 
     return res.json({ success: true, lastSeen: new Date() });
 
@@ -323,8 +323,8 @@ router.delete("/session/:id", async (req: Request, res: Response) => {
       return res.status(403).json({ error: 'Forbidden: Cannot revoke other user\'s session' });
     }
 
-    // Delete the session
-    await prisma.session.delete({ where: { id } });
+    // Delete the session (ignore if already gone)
+    await prisma.session.delete({ where: { id } }).catch(() => {});
 
     // If revoking current session, clear cookie
     if (sessionToRevoke.sessionId === sessionId) {
