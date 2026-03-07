@@ -102,8 +102,9 @@ model Deal {
   // Foreign keys
   sellerId     String  @map("seller_id") @db.Uuid
   buyerId      String  @map("buyer_id") @db.Uuid
-  sellerWallet String? @map("seller_wallet")
-  buyerWallet  String? @map("buyer_wallet")
+  sellerWallet    String? @map("seller_wallet")
+  buyerWallet     String? @map("buyer_wallet")
+  createdByWallet String? @map("created_by_wallet")
 
   // Relations
   seller User @relation("SellerDeals", fields: [sellerId], references: [id], onDelete: Restrict)
@@ -172,6 +173,8 @@ model ResolveTicket {
   signature     String
   issuedAt      DateTime     @default(now()) @map("issued_at")
   expiresAt     DateTime?    @map("expires_at")
+  acceptedAt    DateTime?    @map("accepted_at")   // losing party accepted AI verdict
+  escalatedAt   DateTime?    @map("escalated_at")   // losing party escalated to human
   source        TicketSource
 
   // Relations

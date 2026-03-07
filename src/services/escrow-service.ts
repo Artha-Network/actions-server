@@ -103,6 +103,39 @@ export class EscrowService {
     return handleRefund(input, options);
   }
 
+  /**
+   * Build the on-chain resolve instruction + arbiter keypair for partial signing.
+   * Used by release/refund handlers to combine resolve + claim in one user-signed tx.
+   */
+  buildResolveIx(dealId: string, verdict: "RELEASE" | "REFUND"): { ix: TransactionInstruction; arbiterKeypair: Keypair } {
+    const hex = process.env.ARBITER_ED25519_SECRET_HEX;
+    if (!hex || typeof hex !== "string") {
+      throw new Error("ARBITER_ED25519_SECRET_HEX is not set");
+    }
+    const secretBytes = Buffer.from(hex.replace(/^0x/i, ""), "hex");
+    const arbiterKeypair =
+      secretBytes.length === 64
+        ? Keypair.fromSecretKey(new Uint8Array(secretBytes))
+        : secretBytes.length === 32
+          ? Keypair.fromSeed(new Uint8Array(secretBytes))
+          : (() => {
+              throw new Error("ARBITER_ED25519_SECRET_HEX must be 32 or 64 bytes (hex)");
+            })();
+
+    const { publicKey: escrowPda } = getEscrowPda({ dealId });
+    const verdictU8 = verdict === "RELEASE" ? 1 : 2;
+    const data = Buffer.concat([RESOLVE_DISCRIMINATOR, Buffer.from([verdictU8])]);
+    const ix = new TransactionInstruction({
+      programId: solanaConfig.programId,
+      keys: [
+        { pubkey: arbiterKeypair.publicKey, isSigner: true, isWritable: false },
+        { pubkey: escrowPda, isSigner: false, isWritable: true },
+      ],
+      data,
+    });
+    return { ix, arbiterKeypair };
+  }
+
   async resolve(input: ResolveActionInput, options?: ServiceOptions): Promise<ActionResponse & { txSig?: string }> {
     const reqId = resolveReqId(options);
     const startedAt = Date.now();

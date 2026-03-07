@@ -16,6 +16,7 @@ import { withRpcRetry } from "../../../utils/rpc-retry";
 import { INITIATE_DISCRIMINATOR } from "../constants";
 import { resolveReqId, ensureDeadline, derivePayer, fetchDealSummary } from "../utils";
 import { sendCounterpartyNotification } from "../../email.service";
+import { getArbiterPublicKey } from "../../../utils/keypair";
 
 export async function handleInitiate(
   input: InitiateActionInput,
@@ -38,7 +39,13 @@ export async function handleInitiate(
 
   const sellerPubkey = new PublicKey(input.sellerWallet);
   const buyerPubkey = new PublicKey(input.buyerWallet);
-  const arbiterPubkey = input.arbiterWallet ? new PublicKey(input.arbiterWallet) : sellerPubkey;
+  // Default arbiter: use the arbiter service keypair so on-chain resolve works
+  const defaultArbiter = getArbiterPublicKey();
+  const arbiterPubkey = input.arbiterWallet
+    ? new PublicKey(input.arbiterWallet)
+    : defaultArbiter
+      ? new PublicKey(defaultArbiter)
+      : sellerPubkey;
 
   const dealIdBytes = dealIdToBytes(dealId);
 
@@ -200,9 +207,10 @@ export async function handleInitiate(
         id: dealId,
         sellerId,
         buyerId,
-        arbiterPubkey: input.arbiterWallet ?? input.sellerWallet,
+        arbiterPubkey: arbiterPubkey.toBase58(),
         sellerWallet: input.sellerWallet,
         buyerWallet: input.buyerWallet,
+        createdByWallet: input.payer ?? input.sellerWallet,
         priceUsd: new Prisma.Decimal(amountUsd),
         depositTokenMint: solanaConfig.usdcMint.toBase58(),
         vaultAta: vaultAta.toBase58(),
@@ -229,7 +237,7 @@ export async function handleInitiate(
         buyerId,
         sellerWallet: input.sellerWallet,
         buyerWallet: input.buyerWallet,
-        arbiterPubkey: input.arbiterWallet ?? existingDeal.arbiterPubkey,
+        arbiterPubkey: arbiterPubkey.toBase58(),
         priceUsd: new Prisma.Decimal(amountUsd),
         depositTokenMint: solanaConfig.usdcMint.toBase58(),
         vaultAta: vaultAta.toBase58(),

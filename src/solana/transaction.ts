@@ -73,6 +73,37 @@ export async function buildVersionedTransaction(
 }
 
 /**
+ * Build a versioned transaction and partially sign it with the given keypair(s).
+ * The user's wallet will add the remaining signature on the frontend.
+ * Used when combining arbiter-signed resolve with user-signed release/refund.
+ */
+export async function buildPartiallySigned(
+  instructions: TransactionInstruction[],
+  payerKey: PublicKey,
+  partialSigners: Keypair[]
+): Promise<BuildTransactionResult> {
+  const { blockhash, lastValidBlockHeight } = await withRpcRetry(
+    async (conn) => conn.getLatestBlockhash("finalized"),
+    { endpointManager: rpcManager }
+  );
+
+  const message = new TransactionMessage({
+    payerKey,
+    recentBlockhash: blockhash,
+    instructions,
+  }).compileToV0Message();
+
+  const transaction = new VersionedTransaction(message);
+  transaction.sign(partialSigners);
+
+  return {
+    txMessageBase64: Buffer.from(transaction.serialize()).toString("base64"),
+    latestBlockhash: blockhash,
+    lastValidBlockHeight,
+  };
+}
+
+/**
  * Build a versioned transaction, sign it with the given keypair, and send it.
  * Used for server-signed actions (e.g. arbiter resolve).
  */

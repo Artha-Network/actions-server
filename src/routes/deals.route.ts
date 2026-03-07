@@ -4,6 +4,7 @@ import { createUserIfMissing } from '../services/user.service';
 import { prisma } from '../lib/prisma';
 import { supabaseAdmin } from '../lib/supabaseAdmin';
 import { createNotificationByWallet } from '../services/notification.service';
+import { sendCounterpartyNotification } from '../services/email.service';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -135,6 +136,7 @@ router.get('/arbiter/disputed', async (req, res) => {
         price_usd: deal.priceUsd.toString(),
         buyer_wallet: deal.buyerWallet,
         seller_wallet: deal.sellerWallet,
+        created_by_wallet: deal.createdByWallet,
         buyer_email: deal.buyerEmail,
         seller_email: deal.sellerEmail,
         vin: deal.vin,
@@ -687,11 +689,12 @@ router.post('/:id/arbitrate', async (req, res) => {
         arbiterPubkey: arbiter_pubkey,
         signature: ed25519_signature,
         source: 'AI',
-        expiresAt: new Date(ticket.expires_at_utc)
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) // 24hr escalation window
       }
     });
 
     // 9. Update deal status to RESOLVED
+    // Note: On-chain resolve happens atomically with release/refund (combined tx, user pays fee)
     await prisma.deal.update({
       where: { id: dealId },
       data: { status: 'RESOLVED' }
@@ -761,11 +764,165 @@ router.get('/:id/resolution', async (req, res) => {
       arbiter_pubkey: resolveTicket.arbiterPubkey,
       signature: resolveTicket.signature,
       issued_at: resolveTicket.issuedAt.toISOString(),
-      expires_at: resolveTicket.expiresAt?.toISOString() || null
+      expires_at: resolveTicket.expiresAt?.toISOString() || null,
+      accepted_at: resolveTicket.acceptedAt?.toISOString() || null,
+      escalated_at: resolveTicket.escalatedAt?.toISOString() || null,
+      source: resolveTicket.source,
     });
   } catch (error) {
     console.error('Failed to fetch resolution:', error);
     res.status(500).json({ error: 'Failed to fetch resolution' });
+  }
+});
+
+// ============================================================
+// Accept AI verdict (losing party agrees)
+// ============================================================
+router.post('/:id/accept-verdict', async (req, res) => {
+  try {
+    const { id: dealId } = req.params;
+    const { wallet_address } = req.body;
+
+    if (!wallet_address) {
+      return res.status(400).json({ error: 'wallet_address is required' });
+    }
+
+    const deal = await prisma.deal.findUnique({ where: { id: dealId } });
+    if (!deal) return res.status(404).json({ error: 'Deal not found' });
+    if (deal.status !== 'RESOLVED') {
+      return res.status(400).json({ error: `Deal is in ${deal.status} status, expected RESOLVED` });
+    }
+
+    const ticket = await prisma.resolveTicket.findFirst({
+      where: { dealId },
+      orderBy: { issuedAt: 'desc' },
+    });
+    if (!ticket) return res.status(404).json({ error: 'No resolution found' });
+    if (ticket.source === 'HUMAN') {
+      return res.status(400).json({ error: 'Human verdict is final — no acceptance needed' });
+    }
+    if (ticket.acceptedAt) {
+      return res.status(400).json({ error: 'Verdict already accepted' });
+    }
+    if (ticket.escalatedAt) {
+      return res.status(400).json({ error: 'Verdict already escalated to human arbitration' });
+    }
+
+    // Only the losing party needs to accept
+    const isLosingParty =
+      (ticket.finalAction === 'RELEASE' && deal.buyerWallet === wallet_address) ||
+      (ticket.finalAction === 'REFUND' && deal.sellerWallet === wallet_address);
+    if (!isLosingParty) {
+      return res.status(403).json({ error: 'Only the losing party can accept the verdict' });
+    }
+
+    await prisma.resolveTicket.update({
+      where: { id: ticket.id },
+      data: { acceptedAt: new Date() },
+    });
+
+    // Notify winning party — in-app + email
+    const winnerWallet = ticket.finalAction === 'RELEASE' ? deal.sellerWallet : deal.buyerWallet;
+    const winnerEmail = ticket.finalAction === 'RELEASE' ? deal.sellerEmail : deal.buyerEmail;
+    if (winnerWallet) {
+      createNotificationByWallet(winnerWallet, "Verdict accepted — claim your funds", {
+        body: `The other party accepted the ${ticket.finalAction} verdict. Visit the deal page to claim your funds immediately.`,
+        type: "resolution",
+        dealId,
+      });
+    }
+    // Email the winning party
+    if (winnerEmail) {
+      sendCounterpartyNotification({
+        dealId,
+        dealTitle: deal.title ?? `Deal ${dealId.slice(0, 8)}`,
+        counterpartyEmail: winnerEmail,
+        amountUsd: deal.priceUsd.toString(),
+        initiatorName: 'Artha Network',
+      }).catch(console.error);
+    }
+
+    res.json({ ok: true, accepted_at: new Date().toISOString() });
+  } catch (error) {
+    console.error('Failed to accept verdict:', error);
+    res.status(500).json({ error: 'Failed to accept verdict' });
+  }
+});
+
+// ============================================================
+// Escalate to human arbitration (losing party disagrees)
+// ============================================================
+router.post('/:id/escalate', async (req, res) => {
+  try {
+    const { id: dealId } = req.params;
+    const { wallet_address, reason } = req.body;
+
+    if (!wallet_address) {
+      return res.status(400).json({ error: 'wallet_address is required' });
+    }
+
+    const deal = await prisma.deal.findUnique({ where: { id: dealId } });
+    if (!deal) return res.status(404).json({ error: 'Deal not found' });
+    if (deal.status !== 'RESOLVED') {
+      return res.status(400).json({ error: `Deal is in ${deal.status} status, expected RESOLVED` });
+    }
+
+    const ticket = await prisma.resolveTicket.findFirst({
+      where: { dealId },
+      orderBy: { issuedAt: 'desc' },
+    });
+    if (!ticket) return res.status(404).json({ error: 'No resolution found' });
+    if (ticket.source === 'HUMAN') {
+      return res.status(400).json({ error: 'Human verdict is final — cannot escalate further' });
+    }
+    if (ticket.acceptedAt) {
+      return res.status(400).json({ error: 'Verdict already accepted — cannot escalate' });
+    }
+    if (ticket.escalatedAt) {
+      return res.status(400).json({ error: 'Already escalated to human arbitration' });
+    }
+
+    // Check 24hr window
+    if (ticket.expiresAt && new Date() > ticket.expiresAt) {
+      return res.status(400).json({ error: 'Escalation window has expired (24 hours). The AI verdict is now final.' });
+    }
+
+    // Only the losing party can escalate
+    const isLosingParty =
+      (ticket.finalAction === 'RELEASE' && deal.buyerWallet === wallet_address) ||
+      (ticket.finalAction === 'REFUND' && deal.sellerWallet === wallet_address);
+    if (!isLosingParty) {
+      return res.status(403).json({ error: 'Only the losing party can escalate to human arbitration' });
+    }
+
+    await prisma.resolveTicket.update({
+      where: { id: ticket.id },
+      data: { escalatedAt: new Date() },
+    });
+
+    // Update deal status back to DISPUTED so human arbiter can re-resolve
+    await prisma.deal.update({
+      where: { id: dealId },
+      data: { status: 'DISPUTED' },
+    });
+
+    // Notify both parties
+    const notifyMsg = `The AI verdict has been escalated to human arbitration. A human arbiter will review the case within 24-48 hours.`;
+    if (deal.buyerWallet) {
+      createNotificationByWallet(deal.buyerWallet, "Escalated to human arbitration", {
+        body: notifyMsg, type: "dispute", dealId,
+      });
+    }
+    if (deal.sellerWallet) {
+      createNotificationByWallet(deal.sellerWallet, "Escalated to human arbitration", {
+        body: notifyMsg, type: "dispute", dealId,
+      });
+    }
+
+    res.json({ ok: true, escalated_at: new Date().toISOString(), reason: reason || null });
+  } catch (error) {
+    console.error('Failed to escalate:', error);
+    res.status(500).json({ error: 'Failed to escalate to human arbitration' });
   }
 });
 

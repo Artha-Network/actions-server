@@ -6,6 +6,7 @@ validateEnv();
 
 import app from "./src/index";
 import { prisma } from "./src/lib/prisma";
+import { createNotificationByWallet } from "./src/services/notification.service";
 
 const port = Number(process.env.PORT ?? "4000");
 
@@ -119,6 +120,41 @@ async function start() {
 		// eslint-disable-next-line no-console
 		console.log(`[actions-server] listening on http://localhost:${port}`);
 	});
+
+	// Check for expired verdict windows every 5 minutes and notify winning parties
+	setInterval(async () => {
+		try {
+			const expiredTickets = await prisma.resolveTicket.findMany({
+				where: {
+					source: 'AI',
+					acceptedAt: null,
+					escalatedAt: null,
+					expiresAt: { lte: new Date() },
+					deal: { status: 'RESOLVED' },
+				},
+				include: { deal: { select: { id: true, buyerWallet: true, sellerWallet: true, buyerEmail: true, sellerEmail: true, title: true, priceUsd: true } } },
+			});
+			for (const ticket of expiredTickets) {
+				// Mark as auto-accepted (window expired)
+				await prisma.resolveTicket.update({
+					where: { id: ticket.id },
+					data: { acceptedAt: new Date() },
+				});
+				// Notify winning party
+				const winnerWallet = ticket.finalAction === 'RELEASE' ? ticket.deal.sellerWallet : ticket.deal.buyerWallet;
+				if (winnerWallet) {
+					createNotificationByWallet(winnerWallet, "Review window expired — claim your funds", {
+						body: `The 24-hour review window has expired. The ${ticket.finalAction} verdict is now final. Visit the deal to claim your funds.`,
+						type: "resolution",
+						dealId: ticket.deal.id,
+					});
+				}
+				console.log(`[cron] Auto-accepted expired ticket ${ticket.id} for deal ${ticket.deal.id}`);
+			}
+		} catch (err) {
+			console.error('[cron] Failed to process expired verdict windows:', err);
+		}
+	}, 5 * 60 * 1000); // every 5 minutes
 
 	// Graceful shutdown
 	const shutdown = async (signal: string) => {
