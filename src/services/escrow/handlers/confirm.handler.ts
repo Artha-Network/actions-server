@@ -54,10 +54,12 @@ export async function handleConfirm(
 
     // Validate actor wallet matches expected role
     let expectedWallet: string | null;
-    if (input.action === "FUND" || input.action === "RELEASE") {
+    if (input.action === "FUND") {
       expectedWallet = deal.buyerWallet;
+    } else if (input.action === "RELEASE") {
+      expectedWallet = deal.sellerWallet; // seller claims released funds
     } else if (input.action === "REFUND") {
-      expectedWallet = deal.sellerWallet;
+      expectedWallet = deal.buyerWallet; // buyer claims refund
     } else if (input.action === "OPEN_DISPUTE") {
       // For dispute, either buyer or seller can be the actor
       if (input.actorWallet !== deal.buyerWallet && input.actorWallet !== deal.sellerWallet) {

@@ -64,6 +64,20 @@ export const ResolveActionSchema = z.object({
 
 export type ResolveActionInput = z.infer<typeof ResolveActionSchema>;
 
+export const ConfirmDeliverySchema = z.object({
+  dealId: z.string().uuid(),
+  buyerWallet: WalletSchema,
+});
+
+export type ConfirmDeliveryInput = z.infer<typeof ConfirmDeliverySchema>;
+
+export const ApproveRefundSchema = z.object({
+  dealId: z.string().uuid(),
+  sellerWallet: WalletSchema,
+});
+
+export type ApproveRefundInput = z.infer<typeof ApproveRefundSchema>;
+
 export const ConfirmActionSchema = z.object({
   dealId: z.string().uuid(),
   txSig: z.string().refine((v) => typeof v === "string" && v.length >= 32 && v.length <= 128, {

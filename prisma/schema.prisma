@@ -40,6 +40,8 @@ enum TicketAction {
 enum TicketSource {
   AI
   HUMAN
+  BUYER_CONFIRMED
+  SELLER_VOLUNTARY
 
   @@map("ticket_source")
 }

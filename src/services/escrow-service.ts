@@ -6,6 +6,8 @@ import type {
   OpenDisputeActionInput,
   ResolveActionInput,
   ConfirmActionInput,
+  ConfirmDeliveryInput,
+  ApproveRefundInput,
   ActionResponse,
 } from "../types/actions";
 import { DealStatus } from "@prisma/client";
@@ -20,6 +22,8 @@ import { handleFund } from "./escrow/handlers/fund.handler";
 import { handleRelease } from "./escrow/handlers/release.handler";
 import { handleRefund } from "./escrow/handlers/refund.handler";
 import { handleConfirm } from "./escrow/handlers/confirm.handler";
+import { handleConfirmDelivery } from "./escrow/handlers/confirm-delivery.handler";
+import { handleApproveRefund } from "./escrow/handlers/approve-refund.handler";
 import type { ServiceOptions } from "./escrow/types";
 import { resolveReqId, derivePayer, fetchDealSummary } from "./escrow/utils";
 import { OPEN_DISPUTE_DISCRIMINATOR, RESOLVE_DISCRIMINATOR } from "./escrow/constants";
@@ -202,6 +206,14 @@ export class EscrowService {
       latestBlockhash: result.latestBlockhash,
       lastValidBlockHeight: result.lastValidBlockHeight,
     };
+  }
+
+  async confirmDelivery(input: ConfirmDeliveryInput, options?: ServiceOptions) {
+    return handleConfirmDelivery(input, options);
+  }
+
+  async approveRefund(input: ApproveRefundInput, options?: ServiceOptions) {
+    return handleApproveRefund(input, options);
   }
 
   async confirm(input: ConfirmActionInput, options?: ServiceOptions) {
