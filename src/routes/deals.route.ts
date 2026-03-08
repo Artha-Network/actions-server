@@ -203,6 +203,7 @@ router.get('/:id', async (req, res) => {
       price_usd: deal.priceUsd.toString(),
       buyer_wallet: deal.buyerWallet,
       seller_wallet: deal.sellerWallet,
+      created_by_wallet: deal.createdByWallet,
       buyer_email: deal.buyerEmail,
       seller_email: deal.sellerEmail,
       vin: deal.vin,

@@ -11,23 +11,29 @@
 
 import * as nodemailer from "nodemailer";
 
-const GMAIL_USER = process.env.GMAIL_USER || "mbirochan@gmail.com";
-const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || "yjul vzae oric zvpd";
+const GMAIL_USER = process.env.GMAIL_USER || "";
+const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || "";
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const FRONTEND_URL = process.env.FRONTEND_URL || "https://artha.network";
+const FRONTEND_URL = (process.env.FRONTEND_URL || "https://artha.network").replace(/\/+$/, "");
 const FROM_EMAIL = `Artha Network <${GMAIL_USER}>`;
+
+if (!GMAIL_USER || !GMAIL_APP_PASSWORD) {
+  console.warn("[email] ⚠️ GMAIL_USER or GMAIL_APP_PASSWORD not set — emails will not be sent");
+}
 
 // ---------------------------------------------------------------------------
 // Gmail SMTP transporter (reusable, connection pooling)
 // ---------------------------------------------------------------------------
 
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: {
-    user: GMAIL_USER,
-    pass: GMAIL_APP_PASSWORD,
-  },
-});
+const transporter = (GMAIL_USER && GMAIL_APP_PASSWORD)
+  ? nodemailer.createTransport({
+      service: "gmail",
+      auth: {
+        user: GMAIL_USER,
+        pass: GMAIL_APP_PASSWORD,
+      },
+    })
+  : null;
 
 export interface DealEmailParams {
   to: string;
@@ -179,6 +185,10 @@ function buildFallbackEmail(params: DealEmailParams): { subject: string; html: s
 // ---------------------------------------------------------------------------
 
 async function sendEmail(to: string, subject: string, html: string): Promise<void> {
+  if (!transporter) {
+    console.warn(`[email] Skipped sending to ${to} — SMTP not configured`);
+    return;
+  }
   await transporter.sendMail({
     from: FROM_EMAIL,
     to,

@@ -15,7 +15,7 @@ import { prisma } from "../../../lib/prisma";
 import { withRpcRetry } from "../../../utils/rpc-retry";
 import { INITIATE_DISCRIMINATOR } from "../constants";
 import { resolveReqId, ensureDeadline, derivePayer, fetchDealSummary } from "../utils";
-import { sendCounterpartyNotification } from "../../email.service";
+import { sendCounterpartyNotification, sendDealStatusNotification } from "../../email.service";
 import { getArbiterPublicKey } from "../../../utils/keypair";
 
 export async function handleInitiate(
@@ -285,25 +285,22 @@ export async function handleInitiate(
     );
   }
 
-  // Notify counterparty via email (awaited so frontend knows it was sent)
+  // Notify both parties via email about the new deal (fire-and-forget)
   let emailSent = false;
-  const counterpartyEmail = input.buyerEmail?.trim() || null;
-  if (counterpartyEmail) {
-    try {
-      await sendCounterpartyNotification({
-        to: counterpartyEmail,
-        dealId,
-        dealTitle: input.title,
-        amountUsd: amountUsd,
-        initiatorWallet: input.sellerWallet,
-        counterpartyRole: "buyer",
-        deliverDeadline: new Date(deliverAt * 1000),
-        description: input.description,
-      });
-      emailSent = true;
-    } catch (emailErr) {
+  const buyerEmail = input.buyerEmail?.trim() || null;
+  const sellerEmail = input.sellerEmail?.trim() || null;
+  if (buyerEmail || sellerEmail) {
+    sendDealStatusNotification({
+      dealId,
+      dealTitle: input.title,
+      amountUsd,
+      buyerEmail,
+      sellerEmail,
+      newStatus: "INIT",
+      actorRole: "seller",
+    }).then(() => { emailSent = true; }).catch((emailErr) => {
       console.error("[initiate] Email send failed (non-blocking):", emailErr);
-    }
+    });
   }
 
   const amountUnits = BigInt(parseAmountToUnits(input.amount));
