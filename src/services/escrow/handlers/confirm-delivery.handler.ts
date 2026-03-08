@@ -1,26 +1,25 @@
-import { DealStatus, TicketSource } from "@prisma/client";
-import type { ConfirmDeliveryInput } from "../../../types/actions";
-import { solanaConfig, rpcManager } from "../../../config/solana";
+import { DealStatus } from "@prisma/client";
+import { PublicKey } from "@solana/web3.js";
+import type { ConfirmDeliveryInput, ActionResponse } from "../../../types/actions";
+import { rpcManager } from "../../../config/solana";
 import { getEscrowPda } from "../../../utils/deal";
 import { logAction } from "../../../utils/logger";
 import { withRpcRetry } from "../../../utils/rpc-retry";
-import { resolveReqId, fetchDealSummary } from "../utils";
+import { resolveReqId, derivePayer, fetchDealSummary } from "../utils";
 import { escrowService } from "../../escrow-service";
-import { buildSignAndSendTransaction } from "../../../solana/transaction";
-import { prisma } from "../../../lib/prisma";
-import { sendDealStatusNotification } from "../../email.service";
-import { createNotificationByWallet } from "../../notification.service";
+import { buildPartiallySigned } from "../../../solana/transaction";
 
 const ESCROW_STATUS_OFFSET = 8 + 1 + 32 + 32 + 32 + 32 + 32 + 8 + 2 + 8; // 187
 
 /**
- * Buyer confirms delivery — server-side resolve with VERDICT_RELEASE.
- * The deal moves to RESOLVED so the seller can claim funds from the Resolution page.
+ * Buyer confirms delivery — builds a resolve(VERDICT_RELEASE) tx partial-signed by arbiter.
+ * The buyer signs as fee payer and sends on-chain. After confirmation, the confirm handler
+ * creates the ResolveTicket and transitions deal to RESOLVED.
  */
 export async function handleConfirmDelivery(
   input: ConfirmDeliveryInput,
   options?: { reqId?: string }
-) {
+): Promise<ActionResponse> {
   const reqId = resolveReqId(options);
   const startedAt = Date.now();
 
@@ -50,41 +49,12 @@ export async function handleConfirmDelivery(
     throw new Error(`On-chain escrow is "${STATUS_NAMES[onChainStatus] ?? "Unknown"}" — expected Funded`);
   }
 
-  // Build resolve instruction with VERDICT_RELEASE and send server-side
+  const buyerPubkey = new PublicKey(input.buyerWallet);
+
+  // Build resolve instruction with VERDICT_RELEASE, partial-sign with arbiter
   const { ix: resolveIx, arbiterKeypair } = escrowService.buildResolveIx(deal.id, "RELEASE");
-  const txResult = await buildSignAndSendTransaction([resolveIx], arbiterKeypair);
-
-  // Create ResolveTicket with acceptedAt pre-set (no contest window for voluntary confirmation)
-  await prisma.$transaction(async (tx) => {
-    await tx.resolveTicket.create({
-      data: {
-        dealId: deal.id,
-        finalAction: "RELEASE",
-        confidence: 1.0,
-        rationaleCid: "Buyer confirmed delivery",
-        arbiterPubkey: arbiterKeypair.publicKey.toBase58(),
-        signature: txResult.txSig,
-        source: TicketSource.BUYER_CONFIRMED,
-        acceptedAt: new Date(),
-      },
-    });
-
-    await tx.onchainEvent.create({
-      data: {
-        dealId: deal.id,
-        txSig: txResult.txSig,
-        slot: BigInt(0),
-        instruction: "RESOLVE",
-        mint: solanaConfig.usdcMint.toBase58(),
-        amount: null,
-      },
-    });
-
-    await tx.deal.update({
-      where: { id: deal.id },
-      data: { status: DealStatus.RESOLVED, updatedAt: new Date() },
-    });
-  });
+  const payerKey = derivePayer(buyerPubkey);
+  const txResult = await buildPartiallySigned([resolveIx], payerKey, [arbiterKeypair]);
 
   logAction({
     reqId,
@@ -92,34 +62,15 @@ export async function handleConfirmDelivery(
     dealId: deal.id,
     wallet: input.buyerWallet,
     durationMs: Date.now() - startedAt,
-    status: "RESOLVED",
+    status: deal.status,
   });
 
-  // Fire-and-forget notifications
-  if (deal.sellerWallet) {
-    createNotificationByWallet(deal.sellerWallet, "Delivery confirmed", {
-      body: "The buyer confirmed delivery. Visit the Resolution page to claim your funds.",
-      type: "deal",
-      dealId: deal.id,
-    });
-  }
-
-  // Reload deal for email data
-  const updatedDeal = await prisma.deal.findUnique({
-    where: { id: deal.id },
-    select: { title: true, priceUsd: true, buyerEmail: true, sellerEmail: true },
-  });
-  if (updatedDeal) {
-    sendDealStatusNotification({
-      dealId: deal.id,
-      dealTitle: updatedDeal.title,
-      amountUsd: updatedDeal.priceUsd.toString(),
-      buyerEmail: updatedDeal.buyerEmail,
-      sellerEmail: updatedDeal.sellerEmail,
-      newStatus: "RESOLVED" as any,
-      actorRole: "buyer",
-    }).catch(console.error);
-  }
-
-  return { dealId: deal.id, status: "RESOLVED", verdict: "RELEASE" };
+  return {
+    dealId: deal.id,
+    txMessageBase64: txResult.txMessageBase64,
+    nextClientAction: "confirm",
+    latestBlockhash: txResult.latestBlockhash,
+    lastValidBlockHeight: txResult.lastValidBlockHeight,
+    feePayer: payerKey.toBase58(),
+  };
 }

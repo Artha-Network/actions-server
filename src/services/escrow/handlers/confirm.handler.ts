@@ -1,4 +1,4 @@
-import { AttestationKind, DealStatus } from "@prisma/client";
+import { AttestationKind, DealStatus, TicketSource } from "@prisma/client";
 import type { ConfirmActionInput } from "../../../types/actions";
 import { solanaConfig } from "../../../config/solana";
 import { logAction } from "../../../utils/logger";
@@ -69,6 +69,10 @@ export async function handleConfirm(
     } else if (input.action === "RESOLVE") {
       // For resolve, actor must be the arbiter
       expectedWallet = deal.arbiterPubkey;
+    } else if (input.action === "CONFIRM_DELIVERY") {
+      expectedWallet = deal.buyerWallet; // buyer confirms delivery
+    } else if (input.action === "APPROVE_REFUND") {
+      expectedWallet = deal.sellerWallet; // seller approves refund
     } else {
       expectedWallet = deal.sellerWallet;
     }
@@ -104,9 +108,46 @@ export async function handleConfirm(
         // The actual transfer happens when seller signs RELEASE (or buyer signs REFUND).
         nextStatus = DealStatus.RESOLVED;
         break;
+      case "CONFIRM_DELIVERY":
+        if (deal.status !== DealStatus.FUNDED) throw new Error("Invalid transition: can only confirm delivery on FUNDED deals");
+        nextStatus = DealStatus.RESOLVED;
+        break;
+      case "APPROVE_REFUND":
+        if (deal.status !== DealStatus.FUNDED) throw new Error("Invalid transition: can only approve refund on FUNDED deals");
+        nextStatus = DealStatus.RESOLVED;
+        break;
       case "INITIATE":
       default:
         nextStatus = deal.status;
+    }
+
+    // Create ResolveTicket for voluntary actions
+    if (input.action === "CONFIRM_DELIVERY") {
+      await tx.resolveTicket.create({
+        data: {
+          dealId: deal.id,
+          finalAction: "RELEASE",
+          confidence: 1.0,
+          rationaleCid: "Buyer confirmed delivery",
+          arbiterPubkey: "server",
+          signature: input.txSig,
+          source: TicketSource.BUYER_CONFIRMED,
+          acceptedAt: new Date(),
+        },
+      });
+    } else if (input.action === "APPROVE_REFUND") {
+      await tx.resolveTicket.create({
+        data: {
+          dealId: deal.id,
+          finalAction: "REFUND",
+          confidence: 1.0,
+          rationaleCid: "Seller approved voluntary refund",
+          arbiterPubkey: "server",
+          signature: input.txSig,
+          source: TicketSource.SELLER_VOLUNTARY,
+          acceptedAt: new Date(),
+        },
+      });
     }
 
     await tx.onchainEvent.create({
@@ -208,6 +249,18 @@ export async function handleConfirm(
         dealId,
       });
     }
+  } else if (input.action === "CONFIRM_DELIVERY" && sellerWallet) {
+    createNotificationByWallet(sellerWallet, "Delivery confirmed", {
+      body: "The buyer confirmed delivery. Visit the Resolution page to claim your funds.",
+      type: "deal",
+      dealId,
+    });
+  } else if (input.action === "APPROVE_REFUND" && buyerWallet) {
+    createNotificationByWallet(buyerWallet, "Refund approved", {
+      body: "The seller approved a refund. Visit the Resolution page to claim your funds.",
+      type: "deal",
+      dealId,
+    });
   }
 
   return {

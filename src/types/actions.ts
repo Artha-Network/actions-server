@@ -84,7 +84,7 @@ export const ConfirmActionSchema = z.object({
     message: "Invalid transaction signature",
   }),
   actorWallet: WalletSchema,
-  action: z.enum(["INITIATE", "FUND", "RELEASE", "REFUND", "OPEN_DISPUTE", "RESOLVE"]),
+  action: z.enum(["INITIATE", "FUND", "RELEASE", "REFUND", "OPEN_DISPUTE", "RESOLVE", "CONFIRM_DELIVERY", "APPROVE_REFUND"]),
 });
 
 export type ConfirmActionInput = z.infer<typeof ConfirmActionSchema>;
