@@ -51,7 +51,7 @@ router.get("/me", async (req, res) => {
 
     return res.json({
       id: user.id,
-      walletAddress: user.walletAddress,
+      walletAddress: user.walletPublicKey || user.walletAddress,
       displayName: user.displayName,
       emailAddress: user.emailAddress,
       reputationScore: user.reputationScore.toString(),
@@ -122,7 +122,7 @@ router.patch("/me", async (req, res) => {
 
     return res.json({
       id: user.id,
-      walletAddress: user.walletAddress,
+      walletAddress: user.walletPublicKey || user.walletAddress,
       displayName: user.displayName,
       emailAddress: user.emailAddress,
       reputationScore: user.reputationScore.toString(),
