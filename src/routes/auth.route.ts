@@ -15,6 +15,12 @@ const router = express.Router();
 
 // Configuration
 const SESSION_TTL_HOURS = 24; // Session lifetime
+const isProduction = process.env.NODE_ENV === 'production';
+const COOKIE_OPTIONS = {
+  httpOnly: true,
+  secure: isProduction,
+  sameSite: (isProduction ? 'none' : 'lax') as 'none' | 'lax',
+} as const;
 const INACTIVITY_WINDOW_MINUTES = 30; // Inactivity timeout
 const APP_NAME = 'Artha Network';
 
@@ -145,9 +151,7 @@ router.post("/sign-in", async (req: Request, res: Response) => {
 
     // Set secure cookie
     res.cookie('artha_session', sessionId, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
+      ...COOKIE_OPTIONS,
       maxAge: SESSION_TTL_HOURS * 60 * 60 * 1000
     });
 
@@ -191,7 +195,7 @@ router.get("/me", async (req: Request, res: Response) => {
     });
 
     if (!session) {
-      res.clearCookie('artha_session');
+      res.clearCookie('artha_session', COOKIE_OPTIONS);
       return res.status(401).json({ error: 'Session not found' });
     }
 
@@ -199,7 +203,7 @@ router.get("/me", async (req: Request, res: Response) => {
     if (!isSessionActive(session)) {
       // Delete expired/inactive session (ignore if already gone)
       await prisma.session.delete({ where: { id: session.id } }).catch(() => {});
-      res.clearCookie('artha_session');
+      res.clearCookie('artha_session', COOKIE_OPTIONS);
       return res.status(401).json({ error: 'Session expired or inactive' });
     }
 
@@ -239,7 +243,7 @@ router.get("/me", async (req: Request, res: Response) => {
 
   } catch (error) {
     console.error('GET /auth/me error:', error);
-    res.clearCookie('artha_session');
+    res.clearCookie('artha_session', COOKIE_OPTIONS);
     return res.status(500).json({ error: 'Internal Server Error' });
   }
 });
@@ -261,14 +265,14 @@ router.post("/keepalive", async (req: Request, res: Response) => {
     });
 
     if (!session) {
-      res.clearCookie('artha_session');
+      res.clearCookie('artha_session', COOKIE_OPTIONS);
       return res.status(401).json({ error: 'Session not found' });
     }
 
     // Check if session is still valid
     if (!isSessionActive(session)) {
       await prisma.session.delete({ where: { id: session.id } }).catch(() => {});
-      res.clearCookie('artha_session');
+      res.clearCookie('artha_session', COOKIE_OPTIONS);
       return res.status(401).json({ error: 'Session expired or inactive' });
     }
 
@@ -328,7 +332,7 @@ router.delete("/session/:id", async (req: Request, res: Response) => {
 
     // If revoking current session, clear cookie
     if (sessionToRevoke.sessionId === sessionId) {
-      res.clearCookie('artha_session');
+      res.clearCookie('artha_session', COOKIE_OPTIONS);
     }
 
     return res.json({ success: true });
@@ -404,7 +408,7 @@ router.post("/logout", async (req: Request, res: Response) => {
     }
   }
 
-  res.clearCookie('artha_session');
+  res.clearCookie('artha_session', COOKIE_OPTIONS);
   return res.json({ success: true });
 });
 
