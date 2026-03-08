@@ -20,13 +20,16 @@ import notificationsRouter from "./routes/notifications.route";
 import { prisma } from "./lib/prisma";
 
 const app = express();
-
-// CORS configuration — use CORS_ORIGINS env var in production
 const isProduction = process.env.NODE_ENV === "production";
+
+// Trust proxy — required behind Vercel/reverse proxy for correct client IP in rate limiting
+if (isProduction) app.set("trust proxy", 1);
+
+// CORS — needed for direct API access; proxy-based requests (same-origin) bypass CORS
 const corsOrigins = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(",").map((o) => o.trim())
   : isProduction
-    ? [] // No default origins in production — must be configured
+    ? [] // Proxy-based setup doesn't need CORS origins
     : ["http://localhost:3000", "http://localhost:5173", "http://localhost:8080", "http://localhost:8081"];
 
 app.use(cors({ origin: corsOrigins, credentials: true }));
@@ -52,7 +55,7 @@ app.use((req, res, next) => {
 // Rate limiting
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: 300,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many requests, please try again later" },
@@ -68,7 +71,7 @@ const escrowLimiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 20,
+  max: 50,
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: "Too many auth requests, please try again later" },

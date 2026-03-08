@@ -16,10 +16,13 @@ const router = express.Router();
 // Configuration
 const SESSION_TTL_HOURS = 24; // Session lifetime
 const isProduction = process.env.NODE_ENV === 'production';
+// SameSite=Lax works for both same-origin (Vercel proxy) and same-site (custom subdomain).
+// Only use 'none' when CORS_ORIGINS is explicitly set (direct cross-origin access).
+const useNoneSameSite = isProduction && !!process.env.CORS_ORIGINS;
 const COOKIE_OPTIONS = {
   httpOnly: true,
   secure: isProduction,
-  sameSite: (isProduction ? 'none' : 'lax') as 'none' | 'lax',
+  sameSite: (useNoneSameSite ? 'none' : 'lax') as 'none' | 'lax',
 } as const;
 const INACTIVITY_WINDOW_MINUTES = 30; // Inactivity timeout
 const APP_NAME = 'Artha Network';
