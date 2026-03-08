@@ -7,7 +7,7 @@ import { rpcManager } from "../../../config/solana";
 import { prisma } from "../../../lib/prisma";
 import { withRpcRetry } from "../../../utils/rpc-retry";
 import { resolveReqId } from "../utils";
-import { sendDealCompletionNotification } from "../../email.service";
+import { sendDealStatusNotification } from "../../email.service";
 import { createNotificationByWallet } from "../../notification.service";
 
 export async function handleConfirm(
@@ -46,9 +46,11 @@ export async function handleConfirm(
     slot = 0;
   }
 
+  let deal_previousStatus!: DealStatus;
   const result = await prisma.$transaction(async (tx) => {
     const deal = await tx.deal.findUnique({ where: { id: input.dealId } });
     if (!deal) throw new Error("Deal not found");
+    deal_previousStatus = deal.status;
 
     // Validate actor wallet matches expected role
     let expectedWallet: string | null;
@@ -147,15 +149,16 @@ export async function handleConfirm(
     updateReputationRefunded(input.dealId, result.sellerId).catch(console.error);
   }
 
-  // Fire-and-forget completion email to both parties
-  if (result.status === DealStatus.RELEASED || result.status === DealStatus.REFUNDED) {
-    sendDealCompletionNotification({
+  // Fire-and-forget status change email to both parties
+  if (result.status !== deal_previousStatus) {
+    sendDealStatusNotification({
       dealId: input.dealId,
       dealTitle: result.title,
       amountUsd: result.priceUsd.toString(),
       buyerEmail: result.buyerEmail,
       sellerEmail: result.sellerEmail,
-      outcome: result.status as "RELEASED" | "REFUNDED",
+      newStatus: result.status as any,
+      actorRole: input.actorWallet === result.buyerWallet ? "buyer" : "seller",
     }).catch(console.error);
   }
 

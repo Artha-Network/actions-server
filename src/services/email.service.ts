@@ -326,12 +326,179 @@ function buildCompletionFallbackEmail(
 }
 
 // ---------------------------------------------------------------------------
+// Generic deal status change notification (sent to both parties)
+// ---------------------------------------------------------------------------
+
+export interface DealStatusChangeParams {
+  dealId: string;
+  dealTitle?: string | null;
+  amountUsd: string;
+  buyerEmail?: string | null;
+  sellerEmail?: string | null;
+  newStatus: "INIT" | "FUNDED" | "DISPUTED" | "RESOLVED" | "RELEASED" | "REFUNDED";
+  actorRole?: "buyer" | "seller" | "arbiter";
+}
+
+const STATUS_DESCRIPTIONS: Record<string, { label: string; description: string; color: string }> = {
+  INIT: { label: "Deal Created", description: "A new escrow deal has been created. Review the terms and take action.", color: "#3b82f6" },
+  FUNDED: { label: "Escrow Funded", description: "The buyer has deposited funds into the escrow. The seller can now proceed with delivery.", color: "#16a34a" },
+  DISPUTED: { label: "Dispute Opened", description: "A dispute has been opened on this deal. Both parties should submit evidence for AI arbitration.", color: "#f59e0b" },
+  RESOLVED: { label: "Dispute Resolved", description: "The AI arbiter has reviewed the evidence and issued a verdict. The winning party can now claim the funds.", color: "#8b5cf6" },
+  RELEASED: { label: "Funds Released", description: "The escrow funds have been released to the seller. The deal is now complete.", color: "#16a34a" },
+  REFUNDED: { label: "Funds Refunded", description: "The escrow funds have been refunded to the buyer. The deal has been closed.", color: "#dc2626" },
+};
+
+async function generateStatusEmailWithClaude(
+  params: DealStatusChangeParams,
+  recipientRole: "buyer" | "seller",
+): Promise<{ subject: string; html: string } | null> {
+  if (!ANTHROPIC_API_KEY) return null;
+
+  const dealLink = `${FRONTEND_URL}/deal/${params.dealId}`;
+  const statusInfo = STATUS_DESCRIPTIONS[params.newStatus];
+
+  const prompt = `You are writing a professional, friendly email on behalf of Artha Network, a Solana-based smart escrow platform.
+
+An escrow deal status has changed and you need to notify the ${recipientRole}.
+
+Deal details:
+- Title: ${params.dealTitle || "Untitled Deal"}
+- Amount: $${params.amountUsd} USDC
+- New Status: ${statusInfo.label}
+- What happened: ${statusInfo.description}
+- Recipient role: ${recipientRole}
+- Deal link: ${dealLink}
+
+Write a concise, professional email that:
+1. Clearly states the status change: "${statusInfo.label}"
+2. Explains what this means for the ${recipientRole} specifically
+3. Tells them what action they should take next (if any)
+4. Includes the deal link
+5. Keeps a warm but professional tone, signed "The Artha Network Team"
+6. Keep it SHORT — 3-5 sentences max in the body
+
+Respond with valid JSON ONLY, in this exact format:
+{
+  "subject": "<email subject line>",
+  "body": "<full email body as plain text with line breaks as \\n>"
+}`;
+
+  try {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 1024,
+        messages: [{ role: "user", content: prompt }],
+      }),
+      signal: AbortSignal.timeout(15_000),
+    });
+
+    if (!response.ok) return null;
+
+    const data = await response.json();
+    const text = data?.content?.[0]?.text;
+    if (!text) return null;
+
+    const start = text.indexOf("{");
+    const end = text.lastIndexOf("}");
+    if (start === -1 || end === -1) return null;
+    const parsed = JSON.parse(text.slice(start, end + 1)) as { subject: string; body: string };
+    if (!parsed.subject || !parsed.body) return null;
+
+    const html = parsed.body
+      .split("\n")
+      .map((line: string) => (line.trim() ? `<p style="margin:0 0 12px">${line}</p>` : "<br>"))
+      .join("\n");
+
+    return { subject: parsed.subject, html };
+  } catch {
+    return null;
+  }
+}
+
+function buildStatusFallbackEmail(
+  params: DealStatusChangeParams,
+  recipientRole: "buyer" | "seller",
+): { subject: string; html: string } {
+  const dealLink = `${FRONTEND_URL}/deal/${params.dealId}`;
+  const title = params.dealTitle || "Escrow Deal";
+  const statusInfo = STATUS_DESCRIPTIONS[params.newStatus];
+
+  const subject = `${statusInfo.label}: ${title}`;
+
+  const html = `
+<div style="font-family:Arial,sans-serif;max-width:600px;margin:auto;color:#1a1a1a">
+  <div style="background:#0f172a;padding:24px;border-radius:8px 8px 0 0;text-align:center">
+    <h1 style="color:#ffffff;margin:0;font-size:22px">Artha Network</h1>
+    <p style="color:#94a3b8;margin:6px 0 0;font-size:13px">Blockchain-secured smart escrow</p>
+  </div>
+  <div style="padding:32px;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px">
+    <div style="text-align:center;margin-bottom:24px">
+      <span style="background:${statusInfo.color};color:#fff;padding:8px 20px;border-radius:20px;font-weight:600;font-size:14px">${statusInfo.label}</span>
+    </div>
+    <h2 style="margin:0 0 16px;font-size:18px">${title}</h2>
+    <p>${statusInfo.description}</p>
+
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:20px;margin:24px 0">
+      <table style="width:100%;border-collapse:collapse;font-size:14px">
+        <tr><td style="padding:6px 0;color:#64748b">Amount</td><td style="padding:6px 0;font-weight:600">$${params.amountUsd} USDC</td></tr>
+        <tr><td style="padding:6px 0;color:#64748b">Your Role</td><td style="padding:6px 0">${recipientRole.charAt(0).toUpperCase() + recipientRole.slice(1)}</td></tr>
+        <tr><td style="padding:6px 0;color:#64748b">Status</td><td style="padding:6px 0;font-weight:600">${statusInfo.label}</td></tr>
+      </table>
+    </div>
+
+    <div style="text-align:center;margin:32px 0">
+      <a href="${dealLink}" style="background:#0f172a;color:#ffffff;padding:14px 28px;border-radius:6px;text-decoration:none;font-weight:600;font-size:15px">
+        View Deal →
+      </a>
+    </div>
+
+    <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0">
+    <p style="font-size:12px;color:#94a3b8;text-align:center">
+      The Artha Network Team · <a href="${FRONTEND_URL}" style="color:#94a3b8">${FRONTEND_URL.replace(/^https?:\/\//, "")}</a>
+    </p>
+  </div>
+</div>`;
+
+  return { subject, html };
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
 /**
- * Send completion notification to both buyer and seller.
+ * Send status change notification to both buyer and seller.
  * Fire-and-forget — errors are logged but never thrown.
+ */
+export async function sendDealStatusNotification(params: DealStatusChangeParams): Promise<void> {
+  const recipients: { email: string; role: "buyer" | "seller" }[] = [];
+  if (params.buyerEmail?.includes("@")) recipients.push({ email: params.buyerEmail, role: "buyer" });
+  if (params.sellerEmail?.includes("@")) recipients.push({ email: params.sellerEmail, role: "seller" });
+
+  for (const { email, role } of recipients) {
+    try {
+      const content =
+        (await generateStatusEmailWithClaude(params, role)) ??
+        buildStatusFallbackEmail(params, role);
+      await sendEmail(email, content.subject, content.html);
+      console.log(`[email] Sent ${params.newStatus} notification to ${email} (${role}) for deal ${params.dealId}`);
+    } catch (err) {
+      console.error(`[email] Failed to send ${params.newStatus} email to ${email} for deal ${params.dealId}:`, err);
+    }
+  }
+}
+
+/**
+ * Send completion notification to both buyer and seller.
+ * @deprecated Use sendDealStatusNotification with newStatus="RELEASED"|"REFUNDED" instead.
+ * Kept for backwards compatibility.
  */
 export async function sendDealCompletionNotification(params: DealCompletionParams): Promise<void> {
   const recipients: { email: string; role: "buyer" | "seller" }[] = [];

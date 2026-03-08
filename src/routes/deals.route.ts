@@ -4,7 +4,7 @@ import { createUserIfMissing } from '../services/user.service';
 import { prisma } from '../lib/prisma';
 import { supabaseAdmin } from '../lib/supabaseAdmin';
 import { createNotificationByWallet } from '../services/notification.service';
-import { sendCounterpartyNotification } from '../services/email.service';
+import { sendDealStatusNotification } from '../services/email.service';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
@@ -700,7 +700,18 @@ router.post('/:id/arbitrate', async (req, res) => {
       data: { status: 'RESOLVED' }
     });
 
-    // 10. Notify both parties of the arbitration result (non-blocking)
+    // 10. Email both parties about RESOLVED status (fire-and-forget)
+    sendDealStatusNotification({
+      dealId,
+      dealTitle: deal.title,
+      amountUsd: deal.priceUsd.toString(),
+      buyerEmail: deal.buyerEmail,
+      sellerEmail: deal.sellerEmail,
+      newStatus: "RESOLVED",
+      actorRole: "arbiter",
+    }).catch(console.error);
+
+    // 10b. Notify both parties of the arbitration result (non-blocking)
     if (deal.buyerWallet) {
       createNotificationByWallet(deal.buyerWallet, "AI arbitration complete", {
         body: `Verdict: ${ticket.outcome}. View the resolution to execute.`,
@@ -831,16 +842,7 @@ router.post('/:id/accept-verdict', async (req, res) => {
         dealId,
       });
     }
-    // Email the winning party
-    if (winnerEmail) {
-      sendCounterpartyNotification({
-        dealId,
-        dealTitle: deal.title ?? `Deal ${dealId.slice(0, 8)}`,
-        counterpartyEmail: winnerEmail,
-        amountUsd: deal.priceUsd.toString(),
-        initiatorName: 'Artha Network',
-      }).catch(console.error);
-    }
+    // No separate email needed — the winning party was already notified via in-app notification above
 
     res.json({ ok: true, accepted_at: new Date().toISOString() });
   } catch (error) {
