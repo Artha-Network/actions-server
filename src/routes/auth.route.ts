@@ -5,7 +5,7 @@
 import express, { Request, Response } from "express";
 import nacl from 'tweetnacl';
 import { PublicKey } from '@solana/web3.js';
-import { decode } from 'bs58';
+import bs58 from 'bs58';
 import { prisma } from '../lib/prisma';
 import { upsertWalletIdentity, WalletNetwork } from "../services/user.service";
 import { isBase58Address } from "../utils/validation";
@@ -110,7 +110,7 @@ router.post("/sign-in", async (req: Request, res: Response) => {
     // Verify signature
     const messageBytes = new TextEncoder().encode(message);
     const signatureBytes = new Uint8Array(signature);
-    const publicKeyBytes = decode(pubkey);
+    const publicKeyBytes = bs58.decode(pubkey);
 
     const verified = nacl.sign.detached.verify(messageBytes, signatureBytes, publicKeyBytes);
     if (!verified) {
