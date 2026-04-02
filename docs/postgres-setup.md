@@ -9,11 +9,9 @@ DATABASE_URL="postgresql://artha:secret@localhost:5432/artha_dev?schema=public"
 ```
 
 ## Running Locally
-1. cd dev-infra
-2. docker-compose up -d
-3. cd ../actions-server
-4. npx prisma migrate dev --name init
-5. npm run start:dev
+1. Set `DATABASE_URL` in `.env` to your Supabase Pooler URL
+2. `npx prisma db push`
+3. `npm run dev`
 
 ## Schema Overview
 - User: Wallet-identified participant

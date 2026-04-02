@@ -35,7 +35,7 @@ router.get('/', async (req, res) => {
       // Don't auto-create users here
     }
 
-    let whereClause: any = {
+    const whereClause: Record<string, unknown> = {
       OR: [
         { buyerWallet: wallet_address },
         { sellerWallet: wallet_address }
@@ -668,11 +668,11 @@ router.post('/:id/arbitrate', async (req, res) => {
       }
 
       arbiterResponse = await response.json();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Failed to call arbiter service:', error);
       return res.status(500).json({
         error: 'Failed to call arbiter service',
-        details: error.message
+        details: error instanceof Error ? error.message : "Unknown error"
       });
     }
 

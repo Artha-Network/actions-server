@@ -112,9 +112,9 @@ router.post("/title-transfer", async (req: Request, res: Response) => {
       deal_id: deal.id,
       resolve_tx: resolveResult.txSig || null,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("[gov/title-transfer] Error:", error);
-    return res.status(500).json({ error: error.message || "Internal server error" });
+    return res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
   }
 });
 
@@ -139,9 +139,9 @@ router.get("/title/:vin", async (req: Request, res: Response) => {
       created_at: title.createdAt,
       updated_at: title.updatedAt,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("[gov/title] Error:", error);
-    return res.status(500).json({ error: error.message || "Internal server error" });
+    return res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
   }
 });
 
@@ -167,9 +167,9 @@ router.get("/titles", async (_req: Request, res: Response) => {
       })),
       total: titles.length,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("[gov/titles] Error:", error);
-    return res.status(500).json({ error: error.message || "Internal server error" });
+    return res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
   }
 });
 
@@ -208,9 +208,9 @@ router.post("/seed", async (req: Request, res: Response) => {
     }
 
     return res.json({ seeded: results.length, titles: results });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("[gov/seed] Error:", error);
-    return res.status(500).json({ error: error.message || "Internal server error" });
+    return res.status(500).json({ error: error instanceof Error ? error.message : "Internal server error" });
   }
 });
 

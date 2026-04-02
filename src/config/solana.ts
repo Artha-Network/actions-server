@@ -1,7 +1,7 @@
 /**
  * Solana configuration helpers.
  */
-import { clusterApiUrl, Connection, PublicKey } from "@solana/web3.js";
+import { clusterApiUrl, PublicKey } from "@solana/web3.js";
 import { RpcEndpointManager } from "../utils/rpc-endpoint-manager";
 
 type SolanaCluster = "devnet" | "testnet" | "mainnet-beta" | "localnet" | "localhost";
@@ -34,15 +34,6 @@ const CIRCUIT_THRESHOLD = Number(process.env.RPC_CIRCUIT_THRESHOLD) || 4;
 const CIRCUIT_COOLDOWN_MS = Number(process.env.RPC_CIRCUIT_COOLDOWN_MS) || 60_000;
 
 export const rpcManager = new RpcEndpointManager(urls, CIRCUIT_THRESHOLD, CIRCUIT_COOLDOWN_MS);
-
-// Return a Connection for the current best endpoint
-export function getConnection(): Connection {
-  const url = rpcManager.pickEndpoint();
-  // Provide helpful log for debugging (redact keys if present)
-  // eslint-disable-next-line no-console
-  console.debug(`[getConnection] using RPC ${redactUrl(url)}`);
-  return new Connection(url, "confirmed");
-}
 
 function redactUrl(url: string) {
   try {
@@ -119,9 +110,6 @@ const FEATURE_SPONSORED_FEES = process.env.FEATURE_SPONSORED_FEES === "true";
 const FEE_PAYER_PUBKEY = process.env.FEE_PAYER_PUBKEY ?? null;
 
 export const FEE_PAYER = FEATURE_SPONSORED_FEES && FEE_PAYER_PUBKEY ? new PublicKey(FEE_PAYER_PUBKEY) : null;
-
-// Export default connection for backward compatibility (lazy loaded best endpoint)
-export const connection = getConnection();
 
 export const solanaConfig = {
   cluster: SOLANA_CLUSTER,

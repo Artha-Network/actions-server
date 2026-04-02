@@ -27,10 +27,6 @@ export function dealIdToBytes(dealId: string): Buffer {
   return Buffer.from(hex, "hex");
 }
 
-export function dealIdToBigInt(dealId: string): bigint {
-  return BigInt(`0x${dealId.replace(/-/g, "")}`);
-}
-
 interface EscrowSeedsInput {
   dealId: string; // UUID string - required for PDA seeds
 }

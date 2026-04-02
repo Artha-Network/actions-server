@@ -54,7 +54,7 @@ Table: `users`
 
 - web-app: handles wallet connect & redirect; sends wallet_address to backend
 - actions-server: manages user record creation and idempotency
-- core-domain: defines schema, validation, and domain rules
+- Zod schemas: defined in `src/types/actions.ts`
 
 ## Security Considerations
 

@@ -15,7 +15,7 @@ import { prisma } from "../../../lib/prisma";
 import { withRpcRetry } from "../../../utils/rpc-retry";
 import { INITIATE_DISCRIMINATOR } from "../constants";
 import { resolveReqId, ensureDeadline, derivePayer, fetchDealSummary } from "../utils";
-import { sendCounterpartyNotification, sendDealStatusNotification } from "../../email.service";
+import { sendDealStatusNotification } from "../../email.service";
 import { getArbiterPublicKey } from "../../../utils/keypair";
 
 export async function handleInitiate(
@@ -55,7 +55,7 @@ export async function handleInitiate(
   }
 
   // PDA seeds: ["escrow", deal_id(16 bytes)] — must match on-chain program (lib.rs)
-  const { publicKey: escrowPda, bump } = getEscrowPdaFromBytes(dealIdBytes);
+  const { publicKey: escrowPda } = getEscrowPdaFromBytes(dealIdBytes);
 
   const [vaultAuthority, vaultBump] = PublicKey.findProgramAddressSync(
     [Buffer.from("vault"), escrowPda.toBuffer()],

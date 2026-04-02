@@ -151,7 +151,7 @@ model Evidence {
   id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   dealId        String   @map("deal_id") @db.Uuid
   submittedById String   @map("submitted_by") @db.Uuid
-  cid           String
+  cid           String   /// Legacy name — stores Supabase Storage path, NOT an IPFS CID
   mimeType      String   @map("mime_type")
   submittedAt   DateTime @default(now()) @map("submitted_at")
 
@@ -170,7 +170,7 @@ model ResolveTicket {
   finalAction   TicketAction @map("final_action")
   sellerBps     Int?         @map("seller_bps") // if SPLIT, seller share in bps
   confidence    Decimal      @db.Decimal(3, 2)
-  rationaleCid  String       @map("rationale_cid")
+  rationaleCid  String       @map("rationale_cid") /// Legacy name — stores plain-text rationale, NOT an IPFS CID
   arbiterPubkey String       @map("arbiter_pubkey")
   signature     String
   issuedAt      DateTime     @default(now()) @map("issued_at")

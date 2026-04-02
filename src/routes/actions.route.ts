@@ -5,7 +5,6 @@ import {
   ReleaseActionSchema,
   RefundActionSchema,
   OpenDisputeActionSchema,
-  ResolveActionSchema,
   ConfirmActionSchema,
   ConfirmDeliverySchema,
   ApproveRefundSchema,

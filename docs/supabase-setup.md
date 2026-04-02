@@ -16,7 +16,7 @@ Supabase is used as the managed PostgreSQL backend for Artha Network.
 ## Usage
 - actions-server: connects using service role key (see `src/lib/supabaseAdmin.ts`)
 - web-app: connects using anon key (see `web-app/src/lib/supabaseClient.ts`)
-- core-domain: shares Zod schema types for data integrity
+- Zod validation schemas: defined in `src/types/actions.ts`
 
 ## Schema
 Tables:

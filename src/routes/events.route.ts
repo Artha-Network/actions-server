@@ -1,25 +1,12 @@
 import { Router } from 'express';
-import { z } from 'zod';
 import supabase from '../lib/supabaseAdmin';
 
 const router = Router();
 
-// Event tracking schema
-const EventSchema = z.object({
-  event: z.string(),
-  user_id: z.string().optional(),
-  deal_id: z.string().optional(),
-  case_id: z.string().optional(),
-  ts: z.number(),
-  extras: z.record(z.any()).optional(),
-});
-
-// POST /api/events - Track frontend analytics events
+// POST /api/events - Track frontend analytics events (accepted but not persisted)
 router.post('/', async (req, res) => {
   try {
-    // For now, just return success without storing to avoid API key issues
-    // TODO: Set up proper Supabase service role key or create frontend_events table in Prisma
-    
+    // Analytics events are accepted but not persisted (no frontend_events table)
     res.json({ success: true, stored: false });
   } catch (error) {
     console.error('Event tracking error:', error);

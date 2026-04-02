@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "crypto";
+import { createHash } from "crypto";
 
 export const ANCHOR_DISCRIMINATOR_SIZE = 8;
 
@@ -39,15 +39,6 @@ export function u64ToBuffer(value: bigint): Buffer {
   return writeUIntLE(value, 8);
 }
 
-export function u128ToBuffer(value: bigint): Buffer {
-  return writeUIntLE(value, 16);
-}
-
 export function i64ToBuffer(value: bigint): Buffer {
   return writeIntLE(value, 8);
-}
-
-export function ensureUuid(value?: string | null): string {
-  if (!value) return randomUUID();
-  return value;
 }

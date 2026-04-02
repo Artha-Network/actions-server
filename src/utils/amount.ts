@@ -15,12 +15,6 @@ export function parseAmountToUnits(amount: string | number): bigint {
   return BigInt(whole) * SCALE + BigInt(fractionPadded);
 }
 
-export function formatUnitsToDecimal(units: bigint): string {
-  const whole = units / SCALE;
-  const frac = units % SCALE;
-  return `${whole}.${frac.toString().padStart(DECIMALS, "0")}`;
-}
-
 export function toUsdDecimalString(amount: string | number): string {
   if (typeof amount === "number") return amount.toFixed(2);
   const [whole, fraction = ""] = amount.split(".");

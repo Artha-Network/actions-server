@@ -48,12 +48,12 @@ export async function withRpcRetry<T>(
             endpointManager.markSuccess(endpoint);
             if (onAttempt) onAttempt({ endpoint, attempt });
             return res as T;
-        } catch (err: any) {
+        } catch (err: unknown) {
             lastErr = err;
             endpointManager.markFailure(endpoint);
 
             // Determine if error likely transient
-            const msg = String(err?.message ?? err);
+            const msg = err instanceof Error ? err.message : String(err);
             const isTransient = /fetch failed|ETIMEDOUT|ECONNRESET|ECONNREFUSED|ECONNABORTED|429|503|rpc_timeout/i.test(msg);
 
             if (onAttempt) onAttempt({ endpoint, attempt, err });

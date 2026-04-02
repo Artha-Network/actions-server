@@ -1,5 +1,5 @@
 import { TransactionInstruction, TransactionMessage, VersionedTransaction, PublicKey, Keypair, SimulatedTransactionResponse } from "@solana/web3.js";
-import { connection, rpcManager } from "../config/solana";
+import { rpcManager } from "../config/solana";
 import { withRpcRetry } from "../utils/rpc-retry";
 
 export interface BuildTransactionResult {
@@ -283,30 +283,31 @@ export async function simulateVersionedTransaction(
       simulation: simulation.value,
       error: null,
     };
-  } catch (err: any) {
+  } catch (err: unknown) {
     // Extract full error details
-    const errorMessage = err?.message || String(err);
+    const errorMessage = err instanceof Error ? err.message : String(err);
     let logs: string[] = [];
     
     // Try to extract logs from error object
-    if (err?.logs && Array.isArray(err.logs)) {
-      logs = err.logs;
-    } else if (err?.response?.data?.result?.logs) {
-      logs = err.response.data.result.logs;
-    } else if (typeof err?.getLogs === "function") {
+    const errObj = err as Record<string, any>;
+    if (errObj?.logs && Array.isArray(errObj.logs)) {
+      logs = errObj.logs;
+    } else if (errObj?.response?.data?.result?.logs) {
+      logs = errObj.response.data.result.logs;
+    } else if (typeof errObj?.getLogs === "function") {
       try {
-        logs = err.getLogs();
+        logs = errObj.getLogs();
       } catch {
         // getLogs() might not be available
       }
     }
 
     // If we have a signature, try to fetch transaction details
-    if (err?.signature) {
+    if (errObj?.signature) {
       try {
         const tx = await withRpcRetry(
           async (connection) => {
-            return await connection.getTransaction(err.signature, {
+            return await connection.getTransaction(errObj.signature, {
               commitment: "confirmed",
               maxSupportedTransactionVersion: 0,
             });
