@@ -73,6 +73,9 @@ export async function handleConfirm(
       expectedWallet = deal.buyerWallet; // buyer confirms delivery
     } else if (input.action === "APPROVE_REFUND") {
       expectedWallet = deal.sellerWallet; // seller approves refund
+    } else if (input.action === "INITIATE") {
+      // Either buyer or seller can initiate a deal
+      expectedWallet = deal.createdByWallet ?? deal.sellerWallet;
     } else {
       expectedWallet = deal.sellerWallet;
     }

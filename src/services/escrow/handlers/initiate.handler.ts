@@ -144,7 +144,7 @@ export async function handleInitiate(
         nextClientAction: "fund",
         latestBlockhash: blockhash,
         lastValidBlockHeight,
-        feePayer: derivePayer(sellerPubkey).toBase58(),
+        feePayer: derivePayer(input.payer ? new PublicKey(input.payer) : sellerPubkey).toBase58(),
       };
     }
 
@@ -316,10 +316,14 @@ export async function handleInitiate(
     throw new Error(`Instruction data must be 42 bytes, got ${data.length}`);
   }
 
+  // The on-chain program's `payer` (account 0) is a generic Signer — it does NOT need
+  // to be the seller. Use the actual connected wallet so either buyer or seller can initiate.
+  const payerPubkey = input.payer ? new PublicKey(input.payer) : sellerPubkey;
+
   const instruction = new TransactionInstruction({
     programId: solanaConfig.programId,
     keys: [
-      { pubkey: sellerPubkey, isSigner: true, isWritable: true },
+      { pubkey: payerPubkey, isSigner: true, isWritable: true },
       { pubkey: sellerPubkey, isSigner: false, isWritable: false },
       { pubkey: buyerPubkey, isSigner: false, isWritable: false },
       { pubkey: arbiterPubkey, isSigner: false, isWritable: false },
@@ -335,7 +339,7 @@ export async function handleInitiate(
     data,
   });
 
-  const payerKey = derivePayer(sellerPubkey);
+  const payerKey = derivePayer(payerPubkey);
   const txResult = await buildVersionedTransaction([instruction], payerKey);
 
   logAction({
