@@ -5,10 +5,39 @@
  * Exposes PATCH /api/users/me to update user profile (displayName).
  */
 import express from "express";
+import crypto from "crypto";
 import { createUserIfMissing } from "../services/user.service";
 import { prisma } from "../lib/prisma";
 
+/** Build a Gravatar URL from an email address. */
+function gravatarUrl(email: string, size = 200): string {
+  const hash = crypto.createHash("md5").update(email.trim().toLowerCase()).digest("hex");
+  return `https://www.gravatar.com/avatar/${hash}?s=${size}&d=404`;
+}
+
+/** Suggest a display name from the local part of an email address. */
+function suggestNameFromEmail(email: string): string {
+  const local = email.split("@")[0] || "";
+  return local
+    .replace(/[._-]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .trim();
+}
+
 const router = express.Router();
+
+// GET /api/users/email-lookup?email=xxx — returns suggested avatar URL + display name
+router.get("/email-lookup", async (req, res) => {
+  const email = typeof req.query.email === "string" ? req.query.email.trim() : "";
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ error: "Valid email is required" });
+  }
+
+  const avatarUrl = gravatarUrl(email);
+  const suggestedName = suggestNameFromEmail(email);
+
+  return res.json({ avatarUrl, suggestedName });
+});
 
 router.post("/", async (req, res) => {
   const { walletAddress } = req.body ?? {};
@@ -54,6 +83,7 @@ router.get("/me", async (req, res) => {
       walletAddress: user.walletPublicKey || user.walletAddress,
       displayName: user.displayName,
       emailAddress: user.emailAddress,
+      avatarUrl: user.avatarUrl,
       reputationScore: user.reputationScore.toString(),
       kycLevel: user.kycLevel,
       createdAt: user.createdAt.toISOString(),
@@ -84,7 +114,7 @@ router.patch("/me", async (req, res) => {
       return res.status(401).json({ error: 'Invalid session' });
     }
 
-    const { displayName, emailAddress } = req.body ?? {};
+    const { displayName, emailAddress, avatarUrl } = req.body ?? {};
 
     // Validate displayName if provided
     if (displayName !== undefined) {
@@ -110,12 +140,18 @@ router.patch("/me", async (req, res) => {
       }
     }
 
+    // Validate avatarUrl if provided
+    if (avatarUrl !== undefined && avatarUrl !== null && typeof avatarUrl !== 'string') {
+      return res.status(400).json({ error: 'avatarUrl must be a string or null' });
+    }
+
     // Update user profile
     const user = await prisma.user.update({
       where: { id: session.userId },
       data: {
         ...(displayName !== undefined && { displayName: displayName.trim() || null }),
         ...(emailAddress !== undefined && { emailAddress: emailAddress?.trim() || null }),
+        ...(avatarUrl !== undefined && { avatarUrl: avatarUrl || null }),
         updatedAt: new Date(),
       },
     });
@@ -125,6 +161,7 @@ router.patch("/me", async (req, res) => {
       walletAddress: user.walletPublicKey || user.walletAddress,
       displayName: user.displayName,
       emailAddress: user.emailAddress,
+      avatarUrl: user.avatarUrl,
       reputationScore: user.reputationScore.toString(),
       kycLevel: user.kycLevel,
       updatedAt: user.updatedAt.toISOString(),

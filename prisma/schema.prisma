@@ -80,6 +80,7 @@ model User {
   walletAddress   String?       @unique @map("wallet_address")
   emailAddress    String?       @unique @map("email_address")
   displayName     String?       @map("display_name")
+  avatarUrl       String?       @map("avatar_url")
   kycLevel        Int           @default(0) @map("kyc_level")
   reputationScore Decimal       @default(0) @map("reputation_score") @db.Decimal(5, 2)
   network         SolanaNetwork @default(DEVNET)
@@ -131,6 +132,7 @@ model Deal {
   metadata         Json?      @map("metadata") // car details, custom fields
   createdAt        DateTime   @default(now()) @map("created_at")
   fundedAt         DateTime?  @map("funded_at")
+  counterpartyAcceptedAt DateTime? @map("counterparty_accepted_at")
   updatedAt        DateTime   @default(now()) @map("updated_at")
 
   // Children

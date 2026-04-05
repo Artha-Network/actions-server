@@ -118,7 +118,7 @@ router.post("/sign-in", async (req: Request, res: Response) => {
     }
 
     // Get or create user — select only columns guaranteed to exist in DB
-    const userSelect = { id: true, walletPublicKey: true, displayName: true, emailAddress: true, reputationScore: true } as const;
+    const userSelect = { id: true, walletPublicKey: true, displayName: true, emailAddress: true, avatarUrl: true, reputationScore: true } as const;
 
     let user = await prisma.user.findUnique({
       where: { walletPublicKey: pubkey },
@@ -168,7 +168,8 @@ router.post("/sign-in", async (req: Request, res: Response) => {
         id: user.id,
         walletAddress: user.walletPublicKey,
         displayName: user.displayName,
-        emailAddress: user.emailAddress
+        emailAddress: user.emailAddress,
+        avatarUrl: user.avatarUrl,
       }
     });
 
@@ -193,7 +194,7 @@ router.get("/me", async (req: Request, res: Response) => {
     const session = await prisma.session.findUnique({
       where: { sessionId },
       include: {
-        user: { select: { id: true, walletPublicKey: true, displayName: true, emailAddress: true, reputationScore: true } }
+        user: { select: { id: true, walletPublicKey: true, displayName: true, emailAddress: true, avatarUrl: true, reputationScore: true } }
       },
     });
 
@@ -238,6 +239,7 @@ router.get("/me", async (req: Request, res: Response) => {
         walletAddress: user.walletPublicKey,
         displayName: user.displayName,
         emailAddress: user.emailAddress,
+        avatarUrl: user.avatarUrl,
         reputationScore: user.reputationScore.toString(),
         profileComplete,
         isNewUser

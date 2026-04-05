@@ -214,6 +214,7 @@ router.get('/:id', async (req, res) => {
       created_at: deal.createdAt.toISOString(),
       updated_at: deal.updatedAt.toISOString(),
       fee_bps: deal.feeBps,
+      counterparty_accepted_at: deal.counterpartyAcceptedAt?.toISOString() || null,
       onchain_address: deal.onchainAddress,
       buyer: deal.buyer ? {
         display_name: deal.buyer.displayName,
@@ -494,6 +495,84 @@ router.get('/:id/evidence', async (req, res) => {
   } catch (error) {
     console.error('Failed to fetch evidence:', error);
     res.status(500).json({ error: 'Failed to fetch evidence' });
+  }
+});
+
+// ============================================================
+// Counterparty accept / decline
+// ============================================================
+
+// POST /api/deals/:id/accept — counterparty accepts deal terms
+router.post('/:id/accept', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { walletAddress } = req.body as { walletAddress?: string };
+
+    if (!walletAddress) {
+      return res.status(400).json({ error: 'walletAddress is required' });
+    }
+
+    const deal = await prisma.deal.findUnique({ where: { id } });
+    if (!deal) return res.status(404).json({ error: 'Deal not found' });
+    if (deal.status !== 'INIT') {
+      return res.status(400).json({ error: 'Deal is no longer in INIT status' });
+    }
+
+    // Only the counterparty (non-creator) can accept
+    const isParticipant =
+      deal.buyerWallet?.toLowerCase() === walletAddress.toLowerCase() ||
+      deal.sellerWallet?.toLowerCase() === walletAddress.toLowerCase();
+    const isCreator = deal.createdByWallet?.toLowerCase() === walletAddress.toLowerCase();
+
+    if (!isParticipant || isCreator) {
+      return res.status(403).json({ error: 'Only the counterparty can accept this deal' });
+    }
+
+    const updated = await prisma.deal.update({
+      where: { id },
+      data: {
+        counterpartyAcceptedAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+
+    res.json({ success: true, counterpartyAcceptedAt: updated.counterpartyAcceptedAt });
+  } catch (error) {
+    console.error('Failed to accept deal:', error);
+    res.status(500).json({ error: 'Failed to accept deal' });
+  }
+});
+
+// POST /api/deals/:id/decline — counterparty declines deal (deletes INIT deal)
+router.post('/:id/decline', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { walletAddress } = req.body as { walletAddress?: string };
+
+    if (!walletAddress) {
+      return res.status(400).json({ error: 'walletAddress is required' });
+    }
+
+    const deal = await prisma.deal.findUnique({ where: { id } });
+    if (!deal) return res.status(404).json({ error: 'Deal not found' });
+    if (deal.status !== 'INIT') {
+      return res.status(400).json({ error: 'Only deals in INIT status can be declined' });
+    }
+
+    const isParticipant =
+      deal.buyerWallet?.toLowerCase() === walletAddress.toLowerCase() ||
+      deal.sellerWallet?.toLowerCase() === walletAddress.toLowerCase();
+
+    if (!isParticipant) {
+      return res.status(403).json({ error: 'Only a deal participant can decline' });
+    }
+
+    await prisma.deal.delete({ where: { id } });
+
+    res.json({ success: true, message: 'Deal declined and removed' });
+  } catch (error) {
+    console.error('Failed to decline deal:', error);
+    res.status(500).json({ error: 'Failed to decline deal' });
   }
 });
 
