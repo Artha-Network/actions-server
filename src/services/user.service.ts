@@ -7,44 +7,53 @@ import { prisma } from "../lib/prisma";
 export type WalletNetwork = "devnet" | "testnet" | "localnet";
 
 export const createUserIfMissing = async (walletAddress: string) => {
-  // Check if user exists
-  const existingUser = await prisma.user.findUnique({
-    where: { walletAddress },
-  });
-
-  if (existingUser) {
-    return {
-      id: existingUser.id,
-      walletAddress: existingUser.walletAddress,
-      walletPublicKey: existingUser.walletPublicKey,
-      displayName: existingUser.displayName,
-      emailAddress: existingUser.emailAddress,
-      reputationScore: existingUser.reputationScore.toString(),
-      kycLevel: existingUser.kycLevel,
-      createdAt: existingUser.createdAt.toISOString(),
-      updatedAt: existingUser.updatedAt.toISOString(),
-    };
-  }
-
-  // User doesn't exist - create minimal user record
-  const newUser = await prisma.user.create({
-    data: {
-      walletAddress,
-      walletPublicKey: walletAddress,
-      lastSeenAt: new Date(),
+  // Check both unique fields (walletAddress and walletPublicKey can diverge for legacy records)
+  let user = await prisma.user.findFirst({
+    where: {
+      OR: [
+        { walletAddress },
+        { walletPublicKey: walletAddress },
+      ],
     },
   });
 
+  if (!user) {
+    try {
+      user = await prisma.user.create({
+        data: {
+          walletAddress,
+          walletPublicKey: walletAddress,
+          lastSeenAt: new Date(),
+        },
+      });
+    } catch (e: any) {
+      // Race condition: another request created the user between find and create
+      if (e.code === 'P2002') {
+        user = await prisma.user.findFirst({
+          where: {
+            OR: [
+              { walletAddress },
+              { walletPublicKey: walletAddress },
+            ],
+          },
+        });
+        if (!user) throw e;
+      } else {
+        throw e;
+      }
+    }
+  }
+
   return {
-    id: newUser.id,
-    walletAddress: newUser.walletAddress,
-    walletPublicKey: newUser.walletPublicKey,
-    displayName: newUser.displayName,
-    emailAddress: newUser.emailAddress,
-    reputationScore: newUser.reputationScore.toString(),
-    kycLevel: newUser.kycLevel,
-    createdAt: newUser.createdAt.toISOString(),
-    updatedAt: newUser.updatedAt.toISOString(),
+    id: user.id,
+    walletAddress: user.walletAddress,
+    walletPublicKey: user.walletPublicKey,
+    displayName: user.displayName,
+    emailAddress: user.emailAddress,
+    reputationScore: user.reputationScore.toString(),
+    kycLevel: user.kycLevel,
+    createdAt: user.createdAt.toISOString(),
+    updatedAt: user.updatedAt.toISOString(),
   };
 };
 

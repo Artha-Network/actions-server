@@ -109,16 +109,39 @@ router.post("/sign-in", async (req: Request, res: Response) => {
     // Get or create user — select only columns guaranteed to exist in DB
     const userSelect = { id: true, walletPublicKey: true, displayName: true, emailAddress: true, avatarUrl: true, reputationScore: true } as const;
 
-    let user = await prisma.user.findUnique({
-      where: { walletPublicKey: pubkey },
+    let user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { walletPublicKey: pubkey },
+          { walletAddress: pubkey },
+        ],
+      },
       select: userSelect,
     });
 
     if (!user) {
-      user = await prisma.user.create({
-        data: { walletPublicKey: pubkey, walletAddress: pubkey },
-        select: userSelect,
-      });
+      try {
+        user = await prisma.user.create({
+          data: { walletPublicKey: pubkey, walletAddress: pubkey },
+          select: userSelect,
+        });
+      } catch (e: any) {
+        // Race condition: another request created the user between find and create
+        if (e.code === 'P2002') {
+          user = await prisma.user.findFirst({
+            where: {
+              OR: [
+                { walletPublicKey: pubkey },
+                { walletAddress: pubkey },
+              ],
+            },
+            select: userSelect,
+          });
+          if (!user) throw e;
+        } else {
+          throw e;
+        }
+      }
     }
 
     // Create session

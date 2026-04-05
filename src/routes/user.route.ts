@@ -81,6 +81,12 @@ router.get("/me", async (req, res) => {
       return res.status(401).json({ error: 'Session expired or inactive' });
     }
 
+    // Bump lastSeen so active users don't hit the inactivity window
+    await prisma.session.update({
+      where: { id: session.id },
+      data: { lastSeen: new Date() },
+    }).catch(() => {});
+
     const user = session.user;
 
     return res.json({
@@ -122,6 +128,12 @@ router.patch("/me", async (req, res) => {
     if (!isSessionActive(session)) {
       return res.status(401).json({ error: 'Session expired or inactive' });
     }
+
+    // Bump lastSeen so active users don't hit the inactivity window
+    await prisma.session.update({
+      where: { id: session.id },
+      data: { lastSeen: new Date() },
+    }).catch(() => {});
 
     const { displayName, emailAddress, avatarUrl } = req.body ?? {};
 
@@ -185,7 +197,7 @@ router.patch("/me", async (req, res) => {
       // Prisma unique constraint violation (P2002)
       if ('code' in error && (error as any).code === 'P2002') {
         const target = (error as any).meta?.target;
-        if (target?.includes('email_address')) {
+        if (target?.includes('emailAddress') || target?.includes('email_address')) {
           return res.status(409).json({ error: 'This email address is already in use by another account' });
         }
         return res.status(409).json({ error: 'A unique constraint was violated' });
