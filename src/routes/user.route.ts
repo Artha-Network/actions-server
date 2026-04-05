@@ -8,6 +8,7 @@ import express from "express";
 import crypto from "crypto";
 import { createUserIfMissing } from "../services/user.service";
 import { prisma } from "../lib/prisma";
+import { isSessionActive } from "../utils/session";
 
 /** Build a Gravatar URL from an email address. */
 function gravatarUrl(email: string, size = 200): string {
@@ -76,6 +77,10 @@ router.get("/me", async (req, res) => {
       return res.status(401).json({ error: 'Invalid session' });
     }
 
+    if (!isSessionActive(session)) {
+      return res.status(401).json({ error: 'Session expired or inactive' });
+    }
+
     const user = session.user;
 
     return res.json({
@@ -112,6 +117,10 @@ router.patch("/me", async (req, res) => {
 
     if (!session || !session.userId) {
       return res.status(401).json({ error: 'Invalid session' });
+    }
+
+    if (!isSessionActive(session)) {
+      return res.status(401).json({ error: 'Session expired or inactive' });
     }
 
     const { displayName, emailAddress, avatarUrl } = req.body ?? {};
@@ -164,6 +173,7 @@ router.patch("/me", async (req, res) => {
       avatarUrl: user.avatarUrl,
       reputationScore: user.reputationScore.toString(),
       kycLevel: user.kycLevel,
+      createdAt: user.createdAt.toISOString(),
       updatedAt: user.updatedAt.toISOString(),
     });
   } catch (error) {
@@ -172,7 +182,14 @@ router.patch("/me", async (req, res) => {
       if (error.message.includes('Record to update not found')) {
         return res.status(404).json({ error: 'User not found' });
       }
-      // Log the actual error for debugging
+      // Prisma unique constraint violation (P2002)
+      if ('code' in error && (error as any).code === 'P2002') {
+        const target = (error as any).meta?.target;
+        if (target?.includes('email_address')) {
+          return res.status(409).json({ error: 'This email address is already in use by another account' });
+        }
+        return res.status(409).json({ error: 'A unique constraint was violated' });
+      }
       console.error('Error details:', error.message, error.stack);
     }
     return res.status(500).json({ error: 'Internal Server Error' });

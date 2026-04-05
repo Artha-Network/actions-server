@@ -10,6 +10,7 @@ import { prisma } from '../lib/prisma';
 import { upsertWalletIdentity, WalletNetwork } from "../services/user.service";
 import { isBase58Address } from "../utils/validation";
 import { randomBytes } from 'crypto';
+import { isSessionActive } from '../utils/session';
 
 const router = express.Router();
 
@@ -24,7 +25,6 @@ const COOKIE_OPTIONS = {
   secure: isProduction,
   sameSite: (useNoneSameSite ? 'none' : 'lax') as 'none' | 'lax',
 } as const;
-const INACTIVITY_WINDOW_MINUTES = 30; // Inactivity timeout
 const APP_NAME = 'Artha Network';
 
 const isSupportedNetwork = (network: unknown): network is WalletNetwork =>
@@ -43,17 +43,6 @@ function createCanonicalMessage(nonce: string, timestamp: number): string {
     nonce,
     ts: timestamp
   });
-}
-
-// Helper: Check if session is active
-function isSessionActive(session: { expiresAt: Date; lastSeen: Date }): boolean {
-  const now = new Date();
-  const inactivityWindow = new Date(now.getTime() - INACTIVITY_WINDOW_MINUTES * 60 * 1000);
-  
-  return (
-    now < session.expiresAt &&
-    session.lastSeen >= inactivityWindow
-  );
 }
 
 // Helper: Get client info from request
@@ -127,7 +116,7 @@ router.post("/sign-in", async (req: Request, res: Response) => {
 
     if (!user) {
       user = await prisma.user.create({
-        data: { walletPublicKey: pubkey },
+        data: { walletPublicKey: pubkey, walletAddress: pubkey },
         select: userSelect,
       });
     }
