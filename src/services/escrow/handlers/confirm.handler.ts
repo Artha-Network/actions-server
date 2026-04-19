@@ -164,13 +164,22 @@ export async function handleConfirm(
       },
     });
 
+    const updateData: Parameters<typeof tx.deal.update>[0]["data"] = {
+      status: nextStatus,
+      updatedAt: new Date(),
+    };
+    if (nextStatus === DealStatus.FUNDED) {
+      updateData.fundedAt = new Date();
+    }
+    // Mark the deal as confirmed on the first successful INITIATE tx so it
+    // becomes visible in list queries (pending/abandoned drafts stay hidden).
+    if (input.action === "INITIATE" && !deal.confirmedAt) {
+      updateData.confirmedAt = new Date();
+    }
+
     return tx.deal.update({
       where: { id: deal.id },
-      data: {
-        status: nextStatus,
-        fundedAt: nextStatus === DealStatus.FUNDED ? new Date() : deal.fundedAt,
-        updatedAt: new Date(),
-      },
+      data: updateData,
       select: {
         id: true,
         status: true,

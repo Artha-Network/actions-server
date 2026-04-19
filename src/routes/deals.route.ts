@@ -39,7 +39,10 @@ router.get('/', async (req, res) => {
       OR: [
         { buyerWallet: wallet_address },
         { sellerWallet: wallet_address }
-      ]
+      ],
+      // Hide pending/abandoned drafts — only show deals whose on-chain INITIATE
+      // has been confirmed. Drafts become visible once confirm() lands.
+      confirmedAt: { not: null },
     };
 
     if (status && typeof status === 'string') {
@@ -253,13 +256,14 @@ router.get('/events/recent', async (req, res) => {
     // Ensure user exists in database before querying events
     await createUserIfMissing(wallet_address);
 
-    // Get deals for this wallet first
+    // Get deals for this wallet first (confirmed only — skip pending drafts)
     const userDeals = await prisma.deal.findMany({
       where: {
         OR: [
           { buyerWallet: wallet_address },
           { sellerWallet: wallet_address }
-        ]
+        ],
+        confirmedAt: { not: null },
       },
       select: { id: true }
     });

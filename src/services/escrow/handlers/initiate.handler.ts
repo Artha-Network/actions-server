@@ -92,7 +92,7 @@ export async function handleInitiate(
         sellerWallet: input.sellerWallet,
         buyerWallet: input.buyerWallet,
       },
-      select: { id: true, status: true },
+      select: { id: true, status: true, confirmedAt: true },
     });
 
     if (existingDealByPda) {
@@ -121,6 +121,17 @@ export async function handleInitiate(
           : "escrow_account_already_initialized_continuing",
         durationMs: Date.now() - startedAt,
       });
+
+      // Heal pending/abandoned rows: if the PDA exists on-chain, the deal is real,
+      // even if the original confirm() round-trip never completed on the frontend.
+      if (!existingDealByPda.confirmedAt) {
+        await prisma.deal.update({
+          where: { id: existingDealByPda.id },
+          data: { confirmedAt: new Date() },
+        }).catch((err) => {
+          console.warn("[initiate] Failed to backfill confirmedAt for existing deal:", err);
+        });
+      }
 
       let blockhash = "";
       let lastValidBlockHeight = 0;

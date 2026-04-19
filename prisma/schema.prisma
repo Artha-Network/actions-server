@@ -131,6 +131,9 @@ model Deal {
   feeBps           Int        @default(0) @map("fee_bps")
   metadata         Json?      @map("metadata") // car details, custom fields
   createdAt        DateTime   @default(now()) @map("created_at")
+  // Set when the on-chain INITIATE tx is confirmed. Deals with confirmedAt=null
+  // are pending/abandoned drafts and are filtered out of list queries.
+  confirmedAt      DateTime?  @map("confirmed_at")
   fundedAt         DateTime?  @map("funded_at")
   counterpartyAcceptedAt DateTime? @map("counterparty_accepted_at")
   updatedAt        DateTime   @default(now()) @map("updated_at")
