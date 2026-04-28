@@ -59,10 +59,50 @@ router.post("/generate-contract", aiLimiter, async (req, res) => {
         console.warn("[AI] Arbiter service unreachable or failed, returning fallback contract:", error instanceof Error ? error.message : error);
         // Return a template contract so the UI can proceed even when arbiter is down
         const d = req.body as Record<string, string>;
+        const esc = (v: unknown) => String(v ?? "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
         const today = new Date().toISOString().split("T")[0];
+        const contract = `<article class="contract">
+  <h1>${esc(d.title ?? "Escrow Agreement")}</h1>
+  <p><strong>Date:</strong> ${today}</p>
+
+  <h2>1. Parties</h2>
+  <table>
+    <thead><tr><th>Role</th><th>Wallet</th></tr></thead>
+    <tbody>
+      <tr><td>Initiator (${esc(d.role ?? "party")})</td><td><code>Connected wallet</code></td></tr>
+      <tr><td>Counterparty</td><td><code>${esc(d.counterparty ?? "Counterparty")}</code></td></tr>
+    </tbody>
+  </table>
+
+  <h2>2. Agreement</h2>
+  <p>${esc(d.description ?? "As described by the initiating party.")}</p>
+
+  <h2>3. Financial Terms</h2>
+  <ul>
+    <li><strong>Amount:</strong> ${esc(d.amount ?? "0")} USDC</li>
+    <li><strong>Held in:</strong> On-chain escrow (Solana)</li>
+  </ul>
+
+  <h2>4. Deadlines</h2>
+  <ul>
+    <li><strong>Delivery:</strong> ${esc(d.completionDeadline ?? d.deliveryDeadline ?? "As agreed")}</li>
+    <li><strong>Dispute window:</strong> ${esc(d.disputeDeadline ?? "7")} days after delivery</li>
+  </ul>
+
+  <h2>5. Dispute Resolution</h2>
+  <p>Disputes will be reviewed by the Artha AI arbiter. The arbiter's signed resolution ticket will govern fund release.</p>
+
+  <hr />
+  <p><em>Template contract — AI service is temporarily unavailable. Review all terms before proceeding.</em></p>
+</article>`;
         return res.status(200).json({
             source: "fallback",
-            contract: `# ${d.title ?? "Escrow Agreement"}\n\n**Date:** ${today}\n\n## Parties\n- **Initiator (${d.role ?? "party"}):** Connected wallet\n- **Counterparty:** \`${d.counterparty ?? "Counterparty"}\`\n\n## Agreement\n\n${d.description ?? "As described by the initiating party."}\n\n## Financial Terms\n- **Amount:** ${d.amount ?? "0"} USDC\n- **Held in:** On-chain escrow (Solana)\n\n## Deadlines\n- **Delivery:** ${d.completionDeadline ?? d.deliveryDeadline ?? "As agreed"}\n- **Dispute window:** ${d.disputeDeadline ?? "7"} days after delivery\n\n## Dispute Resolution\nDisputes will be reviewed by the Artha AI arbiter. The arbiter's signed resolution ticket will govern fund release.\n\n---\n*Template contract — AI service is temporarily unavailable. Review all terms before proceeding.*`,
+            contract,
             questions: [
                 "Is the description of work complete and unambiguous?",
                 "Have both parties agreed to the delivery deadline?",
