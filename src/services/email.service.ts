@@ -486,22 +486,47 @@ function buildStatusFallbackEmail(
 /**
  * Send status change notification to both buyer and seller.
  * Fire-and-forget — errors are logged but never thrown.
+ *
+ * Both parties are always notified (in parallel) regardless of who triggered the action.
+ * If the same email is registered for both roles, a single combined email is sent.
  */
 export async function sendDealStatusNotification(params: DealStatusChangeParams): Promise<void> {
-  const recipients: { email: string; role: "buyer" | "seller" }[] = [];
-  if (params.buyerEmail?.includes("@")) recipients.push({ email: params.buyerEmail, role: "buyer" });
-  if (params.sellerEmail?.includes("@")) recipients.push({ email: params.sellerEmail, role: "seller" });
+  const buyerEmail = params.buyerEmail?.trim().toLowerCase() || null;
+  const sellerEmail = params.sellerEmail?.trim().toLowerCase() || null;
+  const buyerValid = !!buyerEmail && buyerEmail.includes("@");
+  const sellerValid = !!sellerEmail && sellerEmail.includes("@");
 
-  for (const { email, role } of recipients) {
+  if (!buyerValid && !sellerValid) {
+    console.warn(`[email] No valid recipient emails for deal ${params.dealId} (status=${params.newStatus})`);
+    return;
+  }
+
+  console.log(
+    `[email] Dispatching ${params.newStatus} notification for deal ${params.dealId} → ` +
+    `buyer=${buyerValid ? buyerEmail : "(none)"}, seller=${sellerValid ? sellerEmail : "(none)"}`
+  );
+
+  const recipients: { email: string; role: "buyer" | "seller" }[] = [];
+  if (buyerValid) recipients.push({ email: buyerEmail!, role: "buyer" });
+  // Skip duplicate send when the same email address is on both sides of the deal
+  if (sellerValid && sellerEmail !== buyerEmail) {
+    recipients.push({ email: sellerEmail!, role: "seller" });
+  } else if (sellerValid && sellerEmail === buyerEmail) {
+    console.log(`[email] Buyer and seller share email ${buyerEmail} — sending one combined notification`);
+  }
+
+  const sends = recipients.map(async ({ email, role }) => {
     try {
       const content =
         (await generateStatusEmailWithClaude(params, role)) ??
         buildStatusFallbackEmail(params, role);
       await sendEmail(email, content.subject, content.html);
-      console.log(`[email] Sent ${params.newStatus} notification to ${email} (${role}) for deal ${params.dealId}`);
+      console.log(`[email] ✓ Sent ${params.newStatus} notification to ${email} (${role}) for deal ${params.dealId}`);
     } catch (err) {
-      console.error(`[email] Failed to send ${params.newStatus} email to ${email} for deal ${params.dealId}:`, err);
+      console.error(`[email] ✗ Failed to send ${params.newStatus} email to ${email} (${role}) for deal ${params.dealId}:`, err);
     }
-  }
+  });
+
+  await Promise.allSettled(sends);
 }
 
