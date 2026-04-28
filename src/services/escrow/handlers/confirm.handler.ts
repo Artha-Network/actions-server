@@ -47,10 +47,12 @@ export async function handleConfirm(
   }
 
   let deal_previousStatus!: DealStatus;
+  let deal_wasUnconfirmed = false;
   const result = await prisma.$transaction(async (tx) => {
     const deal = await tx.deal.findUnique({ where: { id: input.dealId } });
     if (!deal) throw new Error("Deal not found");
     deal_previousStatus = deal.status;
+    deal_wasUnconfirmed = !deal.confirmedAt;
 
     // Validate actor wallet matches expected role
     let expectedWallet: string | null;
@@ -204,17 +206,23 @@ export async function handleConfirm(
     updateReputationRefunded(input.dealId, result.sellerId).catch(console.error);
   }
 
-  // Fire-and-forget status change email to both parties
-  if (result.status !== deal_previousStatus) {
-    sendDealStatusNotification({
-      dealId: input.dealId,
-      dealTitle: result.title,
-      amountUsd: result.priceUsd.toString(),
-      buyerEmail: result.buyerEmail,
-      sellerEmail: result.sellerEmail,
-      newStatus: result.status as any,
-      actorRole: input.actorWallet === result.buyerWallet ? "buyer" : "seller",
-    }).catch(console.error);
+  // Email both parties on status change OR on first-time INITIATE confirmation.
+  // Awaited (not fire-and-forget) so serverless / short-lived workers don't drop the SMTP work.
+  const isFirstInitiateConfirm = input.action === "INITIATE" && deal_wasUnconfirmed;
+  if (result.status !== deal_previousStatus || isFirstInitiateConfirm) {
+    try {
+      await sendDealStatusNotification({
+        dealId: input.dealId,
+        dealTitle: result.title,
+        amountUsd: result.priceUsd.toString(),
+        buyerEmail: result.buyerEmail,
+        sellerEmail: result.sellerEmail,
+        newStatus: (isFirstInitiateConfirm ? "INIT" : result.status) as any,
+        actorRole: input.actorWallet === result.buyerWallet ? "buyer" : "seller",
+      });
+    } catch (emailErr) {
+      console.error(`[confirm] sendDealStatusNotification failed for deal ${input.dealId}:`, emailErr);
+    }
   }
 
   logAction({

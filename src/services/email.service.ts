@@ -18,7 +18,12 @@ const FRONTEND_URL = (process.env.FRONTEND_URL || "https://artha.network").repla
 const FROM_EMAIL = `Artha Network <${GMAIL_USER}>`;
 
 if (!GMAIL_USER || !GMAIL_APP_PASSWORD) {
-  console.warn("[email] ⚠️ GMAIL_USER or GMAIL_APP_PASSWORD not set — emails will not be sent");
+  console.error(
+    "[email] ❌ GMAIL_USER or GMAIL_APP_PASSWORD not set — emails will NOT be sent. " +
+    `GMAIL_USER=${GMAIL_USER ? "set" : "MISSING"}, GMAIL_APP_PASSWORD=${GMAIL_APP_PASSWORD ? "set" : "MISSING"}`
+  );
+} else {
+  console.log(`[email] ✓ SMTP configured (user=${GMAIL_USER}, anthropic=${ANTHROPIC_API_KEY ? "set" : "missing"})`);
 }
 
 // ---------------------------------------------------------------------------
@@ -34,6 +39,14 @@ const transporter = (GMAIL_USER && GMAIL_APP_PASSWORD)
       },
     })
   : null;
+
+// Verify SMTP credentials at startup so auth failures surface immediately, not on first send
+if (transporter) {
+  transporter.verify((err) => {
+    if (err) console.error("[email] ❌ SMTP verify failed at startup:", err);
+    else console.log("[email] ✓ SMTP verify passed — Gmail is reachable and credentials are valid");
+  });
+}
 
 export interface DealEmailParams {
   to: string;
@@ -186,15 +199,17 @@ function buildFallbackEmail(params: DealEmailParams): { subject: string; html: s
 
 async function sendEmail(to: string, subject: string, html: string): Promise<void> {
   if (!transporter) {
-    console.warn(`[email] Skipped sending to ${to} — SMTP not configured`);
-    return;
+    throw new Error(
+      `SMTP not configured (GMAIL_USER=${GMAIL_USER ? "set" : "MISSING"}, GMAIL_APP_PASSWORD=${GMAIL_APP_PASSWORD ? "set" : "MISSING"}) — cannot send to ${to}`
+    );
   }
-  await transporter.sendMail({
+  const info = await transporter.sendMail({
     from: FROM_EMAIL,
     to,
     subject,
     html,
   });
+  console.log(`[email] sendMail accepted: messageId=${info.messageId} response=${info.response}`);
 }
 
 // ---------------------------------------------------------------------------

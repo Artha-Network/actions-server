@@ -296,22 +296,28 @@ export async function handleInitiate(
     );
   }
 
-  // Notify both parties via email about the new deal (fire-and-forget)
+  // Notify both parties via email about the new deal.
+  // Awaited so the SMTP work isn't dropped when the request returns (serverless / short-lived workers).
   let emailSent = false;
   const buyerEmail = input.buyerEmail?.trim() || null;
   const sellerEmail = input.sellerEmail?.trim() || null;
   if (buyerEmail || sellerEmail) {
-    sendDealStatusNotification({
-      dealId,
-      dealTitle: input.title,
-      amountUsd,
-      buyerEmail,
-      sellerEmail,
-      newStatus: "INIT",
-      actorRole: "seller",
-    }).then(() => { emailSent = true; }).catch((emailErr) => {
-      console.error("[initiate] Email send failed (non-blocking):", emailErr);
-    });
+    try {
+      await sendDealStatusNotification({
+        dealId,
+        dealTitle: input.title,
+        amountUsd,
+        buyerEmail,
+        sellerEmail,
+        newStatus: "INIT",
+        actorRole: "seller",
+      });
+      emailSent = true;
+    } catch (emailErr) {
+      console.error("[initiate] sendDealStatusNotification failed:", emailErr);
+    }
+  } else {
+    console.warn(`[initiate] No buyer or seller email supplied for deal ${dealId} — skipping notification`);
   }
 
   const amountUnits = BigInt(parseAmountToUnits(input.amount));
