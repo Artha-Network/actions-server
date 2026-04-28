@@ -1,6 +1,6 @@
 import { DealStatus } from "@prisma/client";
-import { PublicKey, TransactionInstruction } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { PublicKey, SystemProgram, TransactionInstruction } from "@solana/web3.js";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import type { ReleaseActionInput, ActionResponse } from "../../../types/actions";
 import { solanaConfig, rpcManager } from "../../../config/solana";
 import { deriveAta } from "../../../solana/token";
@@ -11,6 +11,8 @@ import { withRpcRetry } from "../../../utils/rpc-retry";
 import { RELEASE_DISCRIMINATOR } from "../constants";
 import { resolveReqId, derivePayer, fetchDealSummary } from "../utils";
 import { escrowService } from "../../escrow-service";
+
+const PROTOCOL_TREASURY = new PublicKey("JCqLFCvuibZtsUBwaafdVW1eMpB5hooFMn8NMoxzYiAD");
 
 const ESCROW_STATUS_OFFSET = 8 + 1 + 32 + 32 + 32 + 32 + 32 + 8 + 2 + 8; // 187
 const STATUS_NAMES = ["Init", "Funded", "Disputed", "Resolved", "Released", "Refunded"];
@@ -83,6 +85,7 @@ export async function handleRelease(
 
   const vaultAta = deriveAta(solanaConfig.usdcMint, vaultAuthority, true);
   const sellerAta = deriveAta(solanaConfig.usdcMint, sellerPubkey);
+  const treasuryAta = deriveAta(solanaConfig.usdcMint, PROTOCOL_TREASURY);
 
   const dealIdBytes = dealIdToBytes(actualDealId);
   const data = Buffer.concat([
@@ -98,7 +101,12 @@ export async function handleRelease(
       { pubkey: vaultAuthority, isSigner: false, isWritable: false },
       { pubkey: vaultAta, isSigner: false, isWritable: true },
       { pubkey: sellerAta, isSigner: false, isWritable: true },
+      { pubkey: PROTOCOL_TREASURY, isSigner: false, isWritable: false },
+      { pubkey: treasuryAta, isSigner: false, isWritable: true },
+      { pubkey: solanaConfig.usdcMint, isSigner: false, isWritable: false },
       { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     ],
     data,
   });
