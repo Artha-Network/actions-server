@@ -1,7 +1,18 @@
 import express from "express";
+import rateLimit from "express-rate-limit";
 import { z } from "zod";
 
 const router = express.Router();
+
+// Tight per-IP cap for AI endpoints — each call hits Anthropic and burns credits.
+// 10 / 15 min is plenty for a real user; protects against retry loops and StrictMode double-mounts.
+const aiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Too many AI requests, please wait a few minutes before trying again" },
+});
 
 const GenerateContractSchema = z.object({
     title: z.string(),
@@ -16,7 +27,7 @@ const GenerateContractSchema = z.object({
 });
 
 // Proxy to Arbiter Service
-router.post("/generate-contract", async (req, res) => {
+router.post("/generate-contract", aiLimiter, async (req, res) => {
     try {
         const parsed = GenerateContractSchema.safeParse(req.body);
         if (!parsed.success) {
